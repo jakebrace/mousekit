@@ -1,0 +1,12 @@
+[package]
+name = "mouse-profiles-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mouse_profiles_core"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"

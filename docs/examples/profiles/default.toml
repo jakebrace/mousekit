@@ -1,0 +1,16 @@
+# ~/.config/mouse-profiles/profiles/default.toml
+# The profile used when no app-specific profile matches.
+# Controls not listed here behave as normal. Left click cannot be bound.
+
+name = "Default"
+
+[bindings]
+# Back thumb button sends numpad 7. Numpad keys make good spare keys for
+# games. F13-F24 only work if the desktop's keyboard option "Use F13-F24 as
+# usual function keys" is on; by default they are media keys games ignore.
+M4 = { type = "key", keys = ["KEY_KP7"] }
+
+# Other binding types:
+# M5 = { type = "key", keys = ["KEY_LEFTALT", "KEY_TAB"] }   # a chord
+# M5 = { type = "mouse_button", button = "BTN_MIDDLE" }
+# M5 = { type = "disabled" }

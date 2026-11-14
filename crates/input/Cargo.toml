@@ -1,0 +1,12 @@
+[package]
+name = "mouse-profiles-input"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mouse_profiles_input"
+
+[dependencies]
+evdev = "0.13.2"
+mouse-profiles-core = { path = "../core" }

@@ -1,0 +1,62 @@
+//! The per-mouse thread: read a frame, remap it, write it.
+
+use mouse_profiles_core::Event;
+use mouse_profiles_input::{Frame, Mouse, NodeInfo};
+
+use crate::{Shared, lock, log};
+
+pub(crate) fn run(shared: Shared, device_index: usize, node: NodeInfo, mut mouse: Mouse) {
+    let label = format!("{} \"{}\"", node.id, node.name);
+
+    match mouse.grab_when_released() {
+        Ok(()) => {
+            log(&format!("grabbed {label} at {}", node.path.display()));
+            forward(&shared, device_index, &mut mouse);
+            log(&format!("{label} disconnected"));
+        }
+        Err(error) => log(&format!("cannot grab {label}: {error}")),
+    }
+
+    // The mouse can no longer send releases, so let go of anything it held,
+    // and free the node so the watcher picks it up when it returns.
+    let mut guard = lock(&shared);
+    // Reborrow so the fields can be borrowed separately.
+    let state = &mut *guard;
+    state.engines[device_index].release_all(&mut state.out);
+    state.flush();
+    state.active.remove(&node.path);
+}
+
+/// Runs until reading fails, which means the mouse went away.
+fn forward(shared: &Shared, device_index: usize, mouse: &mut Mouse) {
+    let mut frame: Vec<Event> = Vec::with_capacity(16);
+    loop {
+        // Blocks here, outside the lock, until the mouse does something.
+        let kind = match mouse.next_frame(&mut frame) {
+            Ok(kind) => kind,
+            Err(_) => return,
+        };
+
+        let mut guard = lock(shared);
+        // Reborrow so the fields can be borrowed separately below.
+        let state = &mut *guard;
+        match kind {
+            Frame::Complete if frame.is_empty() => continue,
+            Frame::Complete if state.paused => {
+                // Paused: mirror the mouse exactly.
+                state.out.extend_from_slice(&frame);
+                state.out.push(Event::SYN);
+            }
+            Frame::Complete => {
+                state.engines[device_index].process_frame(&frame, &mut state.out);
+            }
+            Frame::Dropped => {
+                // Button state is unknown now; releasing everything is the
+                // safe side of wrong.
+                log("the kernel dropped events (daemon too slow?); releasing held keys");
+                state.engines[device_index].release_all(&mut state.out);
+            }
+        }
+        state.flush();
+    }
+}

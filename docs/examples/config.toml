@@ -1,0 +1,25 @@
+# ~/.config/mouse-profiles/config.toml
+# After editing, run: mouse-profiles reload
+# (Changing the [[device]] list needs a daemon restart instead.)
+
+[settings]
+autostart = true
+start_in_tray = true
+
+[[device]]
+# Every vendor:product ID this mouse appears as. 409f is the G502 X over its
+# Lightspeed receiver. c098 is what Solaar reports for the USB cable; it has
+# not been seen plugged in yet, so correct it if `lsusb` says otherwise.
+ids = ["046d:409f", "046d:c098"]
+name = "Logitech G502 X Lightspeed"
+
+  # One block per button or scroll direction you want to bind.
+  # `label` is your name for it; profiles refer to the label.
+  # `event` is what the mouse sends (the name spike (a) printed).
+  [[device.control]]
+  label = "M4"
+  event = "BTN_SIDE"
+
+  [[device.control]]
+  label = "M5"
+  event = "BTN_EXTRA"

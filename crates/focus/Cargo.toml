@@ -1,0 +1,10 @@
+[package]
+name = "mouse-profiles-focus"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mouse_profiles_focus"
+
+[dependencies]

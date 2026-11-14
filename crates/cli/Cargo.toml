@@ -1,0 +1,11 @@
+[package]
+name = "mouse-profiles"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+mouse-profiles-daemon = { path = "../daemon" }
+
+[dev-dependencies]
+evdev = "0.13.2"

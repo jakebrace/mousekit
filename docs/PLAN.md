@@ -134,7 +134,7 @@ autostart = true
 start_in_tray = true
 
 [[device]]
-id = "046d:c08b"            # USB vendor:product, never the eventN path
+ids = ["046d:409f"]         # USB vendor:product, never the eventN path; list every ID the mouse appears as
 name = "Example Gaming Mouse"
 dpi = 1600                  # universal; applied through ratbagd when supported
 polling_hz = 1000
@@ -325,6 +325,24 @@ A review of the plan found seven gaps. None blocks Milestone 0, but each changes
 | Scope of first Rust project | Async, D-Bus and evdev together are a steep start if Rust is new, and generated code you cannot review is a risk | Keep the engine synchronous (one thread per device, no async) until Milestone 3 needs D-Bus. Have Claude Code explain each module before moving on. |
 
 DPI and polling do not need to wait for Milestone 6 either: set them once with the same Windows tool and they persist in the mouse's onboard memory.
+
+## Milestone 0 results
+
+Recorded Nov 13, 2026. All three spikes ran on the target machine (Plasma 6.8.2 on Wayland) and Jake confirmed they behaved as intended. Where a result differs from the text above, this section wins.
+
+| Finding | Detail | Effect on the plan |
+| --- | --- | --- |
+| Device ID | The kernel exposes the mouse over its receiver as `046d:409f` ("Logitech G502 X LS"), not the receiver's own `046d:c547`. Solaar reports the wired USB ID as `c098` (not yet seen plugged in). | A device block has `ids = [...]`, a list, instead of a single `id`. |
+| One input node | The mouse is a single evdev node carrying both mouse and keyboard capabilities. | No second node to grab for this mouse. Multi-node support stays a later concern. |
+| Spike (a), grab and remap | Mirroring through uinput with `BTN_SIDE` swapped for `KEY_F13` worked, including the latency check. | The evdev + uinput design stands. `evdev` 0.13.2 is the crate. |
+| Spike (b), focus | The KWin script loads over D-Bus, reports the current window at once, and delivered focus changes with 0 ms measured delay. Unload by name on start works. | The focus design stands. The Deadlock window class and what the launcher, task switcher and panels report were not written down; capture them at the start of Milestone 2. |
+| udev rule | The draft rule works as written. `/dev/uinput` was already accessible through another package's rule. `udevadm trigger` returns before rules are applied, so follow it with `udevadm settle` in instructions. | Rule lives in `packaging/udev/70-mouse-profiles.rules`. |
+| ratbagd | `ratbagctl list` reports no devices. | ratbagd is not a backend for this mouse. |
+| HID++ | `solaar show` reads DPI, report rate and onboard-profile mode. The hidraw node is accessible through Solaar's udev rule. | Direct HID++ is the Milestone 6 route. Packaging needs its own hidraw rule for users without Solaar. |
+| Onboard profiles | Solaar shows the mouse in host mode with onboard profiles disabled, so bindings stored in onboard memory are inactive while Solaar manages it. | Contradicts the "already bound in onboard memory" adjustment unless every button still emits its own event. Re-check if a button turns out silent or duplicated. |
+| Button diversion | The mouse lists no reprogrammable-controls feature (0x1B04). It has Mouse Button Spy (0x8110) instead. | Hurdle 3's claim that HID++ can divert silent buttons is unproven for this mouse. Investigate in Milestone 6. |
+| F13 as a spare key | With the default keyboard layout, F13 reaches games as the media key `XF86Tools`, and Deadlock registers nothing. Numpad keys (`KEY_KP7`) bind in Deadlock. KDE's layout option "Use F13-F24 as usual function keys" (`fkeys:basic_13-24`) is now enabled on this machine; whether Deadlock then accepts F13 is untested. | Suggest numpad keys as the default spare keys. The GUI's preset list should warn about F13-F24 unless the layout option is on. |
+| zbus | Current `zbus` is 6.2.1; version 6 removed the blocking API. Synchronous code wraps calls in `zbus::block_on`. | The engine stays synchronous as planned, but D-Bus code is written as async functions. |
 
 ## Open questions
 

@@ -1,0 +1,12 @@
+[package]
+name = "mouse-profiles-daemon"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mouse_profiles_daemon"
+
+[dependencies]
+mouse-profiles-core = { path = "../core" }
+mouse-profiles-input = { path = "../input" }
