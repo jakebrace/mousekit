@@ -9,7 +9,7 @@
 mod hidpp;
 mod protocol;
 
-use mouse_profiles_core::{DeviceId, HardwareInfo};
+use mousekit_core::{DeviceId, HardwareInfo};
 
 pub trait Hardware {
     /// Reads the current settings and what the mouse accepts.

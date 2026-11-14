@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use mouse_profiles_core::{
+use mousekit_core::{
     Binding, Config, DeviceConfig, DeviceSnapshot, Macro, Profile, Snapshot, WindowSummary,
     check_macros, check_profiles, resolve,
 };
@@ -17,7 +17,7 @@ use crate::State;
 impl State {
     /// Everything the GUI shows, in one value.
     pub fn snapshot(&self) -> Snapshot {
-        let connected_ids: Vec<_> = mouse_profiles_input::list_nodes()
+        let connected_ids: Vec<_> = mousekit_input::list_nodes()
             .unwrap_or_default()
             .into_iter()
             .filter(|node| self.active.contains(&node.path))

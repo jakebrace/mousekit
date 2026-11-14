@@ -7,7 +7,7 @@
 
 use std::time::{Duration, Instant};
 
-use mouse_profiles_core::{DeviceId, HardwareInfo};
+use mousekit_core::{DeviceId, HardwareInfo};
 
 use crate::{Shared, State, lock, log};
 
@@ -27,7 +27,7 @@ struct Wanted {
 /// settings, and returns the settings afterwards. `Ok(None)` means no
 /// hardware backend can talk to this mouse.
 fn apply(ids: &[DeviceId], wanted: &Wanted) -> Result<Option<HardwareInfo>, String> {
-    let Some(mut hardware) = mouse_profiles_hw::open(ids)? else {
+    let Some(mut hardware) = mousekit_hw::open(ids)? else {
         return Ok(None);
     };
     let before = hardware.info()?;
@@ -65,7 +65,7 @@ pub(crate) fn start_sync(shared: &Shared, device_index: usize) {
             .config
             .devices
             .get(device_index)
-            .is_some_and(|device| mouse_profiles_hw::is_supported(&device.ids));
+            .is_some_and(|device| mousekit_hw::is_supported(&device.ids));
         if !supported {
             return;
         }

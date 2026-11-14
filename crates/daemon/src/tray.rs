@@ -60,11 +60,11 @@ fn label(text: &str) -> String {
 
 impl ksni::Tray for Tray {
     fn id(&self) -> String {
-        "mouse-profiles".into()
+        "mousekit".into()
     }
 
     fn title(&self) -> String {
-        "Mouse Profiles".into()
+        "MouseKit".into()
     }
 
     fn icon_name(&self) -> String {
@@ -82,7 +82,7 @@ impl ksni::Tray for Tray {
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            title: "Mouse Profiles".into(),
+            title: "MouseKit".into(),
             description: if self.view.paused {
                 "Remapping paused".into()
             } else {
@@ -172,7 +172,7 @@ impl ksni::Tray for Tray {
     }
 }
 
-/// Starts the settings window as its own process (`mouse-profiles gui`), so
+/// Starts the settings window as its own process (`mousekit gui`), so
 /// the daemon never loads the GUI toolkit and a GUI crash cannot interrupt
 /// remapping.
 fn open_settings() {

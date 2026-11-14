@@ -1361,66 +1361,66 @@ dependencies = [
 ]
 
 [[package]]
-name = "mouse-profiles"
-version = "0.0.0"
+name = "mousekit"
+version = "0.1.0"
 dependencies = [
  "evdev",
- "mouse-profiles-daemon",
- "mouse-profiles-gui",
+ "mousekit-daemon",
+ "mousekit-gui",
 ]
 
 [[package]]
-name = "mouse-profiles-core"
-version = "0.0.0"
+name = "mousekit-core"
+version = "0.1.0"
 dependencies = [
  "serde",
  "toml",
 ]
 
 [[package]]
-name = "mouse-profiles-daemon"
-version = "0.0.0"
+name = "mousekit-daemon"
+version = "0.1.0"
 dependencies = [
  "ksni",
- "mouse-profiles-core",
- "mouse-profiles-focus",
- "mouse-profiles-hw",
- "mouse-profiles-input",
+ "mousekit-core",
+ "mousekit-focus",
+ "mousekit-hw",
+ "mousekit-input",
  "toml",
  "zbus",
 ]
 
 [[package]]
-name = "mouse-profiles-focus"
-version = "0.0.0"
+name = "mousekit-focus"
+version = "0.1.0"
 dependencies = [
- "mouse-profiles-core",
+ "mousekit-core",
  "zbus",
 ]
 
 [[package]]
-name = "mouse-profiles-gui"
-version = "0.0.0"
+name = "mousekit-gui"
+version = "0.1.0"
 dependencies = [
  "iced",
- "mouse-profiles-core",
+ "mousekit-core",
  "zbus",
 ]
 
 [[package]]
-name = "mouse-profiles-hw"
-version = "0.0.0"
+name = "mousekit-hw"
+version = "0.1.0"
 dependencies = [
- "mouse-profiles-core",
+ "mousekit-core",
  "rustix 1.1.6",
 ]
 
 [[package]]
-name = "mouse-profiles-input"
-version = "0.0.0"
+name = "mousekit-input"
+version = "0.1.0"
 dependencies = [
  "evdev",
- "mouse-profiles-core",
+ "mousekit-core",
 ]
 
 [[package]]

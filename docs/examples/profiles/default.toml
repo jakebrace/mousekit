@@ -1,4 +1,4 @@
-# ~/.config/mouse-profiles/profiles/default.toml
+# ~/.config/mousekit/profiles/default.toml
 # The profile used when no app-specific profile matches. App profiles are
 # layered over it: anything bound here applies everywhere unless an app
 # profile says otherwise.

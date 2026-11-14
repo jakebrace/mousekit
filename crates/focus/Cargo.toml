@@ -1,15 +1,15 @@
 [package]
-name = "mouse-profiles-focus"
+name = "mousekit-focus"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
 [lib]
-name = "mouse_profiles_focus"
+name = "mousekit_focus"
 
 [dependencies]
-mouse-profiles-core = { path = "../core" }
+mousekit-core = { path = "../core" }
 # zbus 5, not 6: the tray crate (ksni) is still on zbus 5, and two copies of
 # zbus in one small daemon is wasteful. Move both when ksni moves.
 zbus = "5.19.0"

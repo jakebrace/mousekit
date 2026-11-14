@@ -1,5 +1,5 @@
-# ~/.config/mouse-profiles/config.toml
-# After editing, run: mouse-profiles reload
+# ~/.config/mousekit/config.toml
+# After editing, run: mousekit reload
 # (Changing the [[device]] list needs a daemon restart instead.)
 
 [settings]

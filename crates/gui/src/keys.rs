@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use mouse_profiles_core::{Key, ScrollAxis, Trigger};
+use mousekit_core::{Key, ScrollAxis, Trigger};
 
 /// A key or button as shown in a dropdown.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,8 +378,8 @@ pub fn from_physical(code: iced::keyboard::key::Code) -> Option<Key> {
 }
 
 /// A macro step in words: "Press B", "Release B", "Wait 40 ms".
-pub fn describe_step(step: &mouse_profiles_core::Step) -> String {
-    use mouse_profiles_core::Step;
+pub fn describe_step(step: &mousekit_core::Step) -> String {
+    use mousekit_core::Step;
     match step {
         Step::KeyDown { key } => format!("Press {}", friendly(*key)),
         Step::KeyUp { key } => format!("Release {}", friendly(*key)),

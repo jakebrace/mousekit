@@ -1,7 +1,7 @@
 //! The per-mouse thread: read a frame, remap it, write it.
 
-use mouse_profiles_core::Event;
-use mouse_profiles_input::{Frame, Mouse, NodeInfo};
+use mousekit_core::Event;
+use mousekit_input::{Frame, Mouse, NodeInfo};
 
 use crate::{Shared, lock, log};
 

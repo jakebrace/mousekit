@@ -1,13 +1,13 @@
 [package]
-name = "mouse-profiles"
+name = "mousekit"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
 [dependencies]
-mouse-profiles-daemon = { path = "../daemon" }
-mouse-profiles-gui = { path = "../gui" }
+mousekit-daemon = { path = "../daemon" }
+mousekit-gui = { path = "../gui" }
 
 [dev-dependencies]
 evdev = "0.13.2"

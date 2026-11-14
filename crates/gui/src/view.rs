@@ -8,7 +8,7 @@ use iced::widget::{
     text_input,
 };
 use iced::{Alignment, Element, Length};
-use mouse_profiles_core::{
+use mousekit_core::{
     Binding, DeviceSnapshot, Key, Macro, MacroMode, Profile, Snapshot, Step, Trigger,
 };
 
@@ -27,9 +27,9 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
             .unwrap_or("Connecting to the daemon...");
         return container(
             column![
-                text("Mouse Profiles").size(26),
+                text("MouseKit").size(26),
                 text(reason),
-                text("Start it with:  mouse-profiles daemon").style(text::secondary),
+                text("Start it with:  mousekit daemon").style(text::secondary),
             ]
             .spacing(12),
         )

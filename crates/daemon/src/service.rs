@@ -12,7 +12,7 @@ use zbus::interface;
 use crate::actions::{self, CAPTURE_TIMEOUT};
 use crate::{Shared, instance, lock};
 
-use mouse_profiles_core::dbus::{BUS_NAME, INTERFACE, OBJECT_PATH};
+use mousekit_core::dbus::{BUS_NAME, INTERFACE, OBJECT_PATH};
 
 /// The bus name in use: the normal one, or a separate one for a test
 /// instance so it never collides with a daemon that is really in use.
@@ -31,7 +31,7 @@ pub(crate) fn claim_name() -> Result<Connection, String> {
     // DoNotQueue alone: take the name only if nobody has it, never replace
     // the current owner and never wait in line behind it. (The connection
     // builder's own `name()` would let a second daemon take the name over.)
-    let already_running = || "another mouse-profiles daemon is already running".to_string();
+    let already_running = || "another mousekit daemon is already running".to_string();
     match connection.request_name_with_flags(bus_name(), RequestNameFlags::DoNotQueue.into()) {
         Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => Ok(connection),
         Ok(_) | Err(zbus::Error::NameTaken) => Err(already_running()),
@@ -54,7 +54,7 @@ struct Api {
 
 /// zbus turns each method name into CamelCase on the bus: `set_override`
 /// is called as `SetOverride`.
-#[interface(name = "io.github.mouseprofiles.Daemon1")]
+#[interface(name = "io.github.jakebrace.mousekit.Daemon1")]
 impl Api {
     /// A human-readable summary of the daemon's state.
     fn status(&self) -> String {
@@ -192,7 +192,7 @@ impl Api {
     }
 }
 
-/// The commands `mouse-profiles <command>` accepts besides `daemon`.
+/// The commands `mousekit <command>` accepts besides `daemon`.
 pub const COMMANDS: &[&str] = &[
     "status", "pause", "resume", "toggle", "reload", "quit", "capture", "profile",
 ];
@@ -212,22 +212,19 @@ pub fn run_command(command: &str, argument: Option<&str>) -> Result<String, Stri
         ("reload", None) => call(&connection, "Reload", &()),
         ("quit", None) => call::<()>(&connection, "Quit", &()).map(|()| "stopping".to_string()),
         ("profile", Some(name)) => call(&connection, "SetOverride", &(name,)),
-        ("profile", None) => {
-            Err("say which profile, or \"auto\": mouse-profiles profile <name>".into())
-        }
+        ("profile", None) => Err("say which profile, or \"auto\": mousekit profile <name>".into()),
         ("capture", None) => capture(&connection),
         _ => Err(format!("\"{command}\" does not take that argument")),
     }
 }
 
-/// `mouse-profiles capture`: prints the first button pressed, then stops.
+/// `mousekit capture`: prints the first button pressed, then stops.
 fn capture(connection: &Connection) -> Result<String, String> {
     call::<()>(connection, "StartCapture", &())?;
     eprintln!("Press a mouse button other than left click, or scroll the wheel...");
     let deadline = Instant::now() + CAPTURE_TIMEOUT;
     let mut result = Err(
-        "nothing was pressed in time (is the mouse connected? check `mouse-profiles status`)"
-            .to_string(),
+        "nothing was pressed in time (is the mouse connected? check `mousekit status`)".to_string(),
     );
     while Instant::now() < deadline {
         let (open, captured): (bool, Vec<String>) = call(connection, "PollCapture", &())?;
@@ -257,7 +254,7 @@ where
         .map_err(|error| match error {
             zbus::Error::MethodError(name, message, _) => {
                 if name.as_str() == "org.freedesktop.DBus.Error.ServiceUnknown" {
-                    "the daemon is not running (start it with: mouse-profiles daemon)".to_string()
+                    "the daemon is not running (start it with: mousekit daemon)".to_string()
                 } else {
                     message.unwrap_or_else(|| name.to_string())
                 }

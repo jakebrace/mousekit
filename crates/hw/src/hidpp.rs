@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use mouse_profiles_core::{DeviceId, HardwareInfo};
+use mousekit_core::{DeviceId, HardwareInfo};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
 use crate::Hardware;

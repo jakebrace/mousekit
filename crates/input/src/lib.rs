@@ -5,7 +5,7 @@
 //! - [`VirtualMouse`]: the uinput device all output is written to.
 //!
 //! No remapping logic lives here. This crate only moves events between the
-//! kernel and the types in `mouse-profiles-core`.
+//! kernel and the types in `mousekit-core`.
 
 mod mouse;
 mod nodes;

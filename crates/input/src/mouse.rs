@@ -7,8 +7,8 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use evdev::raw_stream::RawDevice;
-use mouse_profiles_core::Event;
-use mouse_profiles_core::event::EV_SYN;
+use mousekit_core::Event;
+use mousekit_core::event::EV_SYN;
 
 /// The kernel's "your buffer overflowed, events were lost" marker.
 const SYN_DROPPED: u16 = 3;

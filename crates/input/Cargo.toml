@@ -1,13 +1,13 @@
 [package]
-name = "mouse-profiles-input"
+name = "mousekit-input"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
 [lib]
-name = "mouse_profiles_input"
+name = "mousekit_input"
 
 [dependencies]
 evdev = "0.13.2"
-mouse-profiles-core = { path = "../core" }
+mousekit-core = { path = "../core" }

@@ -1,10 +1,10 @@
-// Runs inside KWin (Plasma 6). Tells the mouse-profiles daemon about every
+// Runs inside KWin (Plasma 6). Tells the mousekit daemon about every
 // focus change. Everything is sent as a string so the D-Bus types never
 // depend on how KWin converts JavaScript numbers.
 
-const SERVICE = "io.github.mouseprofiles.FocusListener";
+const SERVICE = "io.github.jakebrace.mousekit.Focus";
 const PATH = "/Focus";
-const INTERFACE = "io.github.mouseprofiles.Focus";
+const INTERFACE = "io.github.jakebrace.mousekit.Focus1";
 
 // Windows that belong to the desktop itself. They take focus briefly (app
 // launcher, run dialog, logout screen) and must not change the profile.

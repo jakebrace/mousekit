@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use iced::keyboard::{self, key};
 use iced::widget::combo_box;
 use iced::{Subscription, Task};
-use mouse_profiles_core::{Binding, Key, Macro, MacroMode, Profile, Snapshot, Step, Trigger};
+use mousekit_core::{Binding, Key, Macro, MacroMode, Profile, Snapshot, Step, Trigger};
 
 use crate::client::Client;
 use crate::keys::{Chord, KeyChoice, Preset};
@@ -27,7 +27,7 @@ const REFRESH: Duration = Duration::from_millis(300);
 /// Opens the settings window and blocks until it is closed.
 pub fn run() -> Result<(), String> {
     iced::application(App::new, App::update, view::view)
-        .title("Mouse Profiles")
+        .title("MouseKit")
         .subscription(App::subscription)
         .window_size((980.0, 680.0))
         .run()
@@ -348,13 +348,13 @@ impl App {
         if pressed == already_down {
             return;
         }
-        if recording.steps.len() + 2 > mouse_profiles_core::macros::MAX_STEPS {
+        if recording.steps.len() + 2 > mousekit_core::macros::MAX_STEPS {
             return;
         }
         let now = Instant::now();
         if let Some(last) = recording.last_event {
             let ms = now.duration_since(last).as_millis();
-            let ms = ms.min(u128::from(mouse_profiles_core::macros::MAX_DELAY_MS)) as u32;
+            let ms = ms.min(u128::from(mousekit_core::macros::MAX_DELAY_MS)) as u32;
             if ms > 0 {
                 recording.steps.push(Step::Delay { ms });
             }
@@ -725,7 +725,7 @@ impl App {
         Task::none()
     }
 
-    fn device(&self, index: usize) -> Option<mouse_profiles_core::DeviceConfig> {
+    fn device(&self, index: usize) -> Option<mousekit_core::DeviceConfig> {
         Some(self.snapshot.as_ref()?.devices.get(index)?.config.clone())
     }
 
@@ -778,7 +778,7 @@ impl App {
                 let label = keys::suggest_label(&trigger, &taken);
                 self.capture_log
                     .push(format!("Added {what} as \"{label}\""));
-                device.controls.push(mouse_profiles_core::Control {
+                device.controls.push(mousekit_core::Control {
                     label,
                     event: trigger,
                 });

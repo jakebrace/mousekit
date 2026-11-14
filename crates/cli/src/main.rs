@@ -4,10 +4,10 @@
 //! The GUI toolkit is linked in but only loaded by `gui`; the daemon never
 //! touches it, so its memory use stays small.
 
-use mouse_profiles_daemon::service;
+use mousekit_daemon::service;
 
 const USAGE: &str = "\
-Usage: mouse-profiles <command>
+Usage: mousekit <command>
 
   daemon           run the remapper (normally started at login)
   gui              open the settings window
@@ -24,8 +24,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
-        ["daemon"] => mouse_profiles_daemon::run(),
-        ["gui"] => mouse_profiles_gui::run(),
+        ["daemon"] => mousekit_daemon::run(),
+        ["gui"] => mousekit_gui::run(),
         ["--help" | "-h" | "help"] => {
             println!("{USAGE}");
             Ok(())

@@ -6,11 +6,11 @@
 //! It needs /dev/uinput and the udev rule from packaging/udev, so it cannot
 //! run in CI and is ignored by default. Run it by hand with:
 //!
-//!     cargo test -p mouse-profiles --test fake_mouse -- --ignored
+//!     cargo test -p mousekit --test fake_mouse -- --ignored
 //!
 //! It is safe to run while a real daemon is in use: the test daemon gets its
 //! own config, bus name and virtual device name, and no tray, focus backend
-//! or autostart entry (that is what MOUSE_PROFILES_INSTANCE does).
+//! or autostart entry (that is what MOUSEKIT_INSTANCE does).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,9 +24,9 @@ use evdev::{
     RelativeAxisCode,
 };
 
-const BINARY: &str = env!("CARGO_BIN_EXE_mouse-profiles");
-const FAKE_NAME: &str = "mouse-profiles test mouse";
-const OUTPUT_NAME: &str = "mouse-profiles virtual mouse (test)";
+const BINARY: &str = env!("CARGO_BIN_EXE_mousekit");
+const FAKE_NAME: &str = "mousekit test mouse";
+const OUTPUT_NAME: &str = "mousekit virtual mouse (test)";
 const TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Kills the daemon even when an assertion fails, so a failed test never
@@ -42,7 +42,7 @@ impl Daemon {
         command
             .args(args)
             .env("XDG_CONFIG_HOME", &self.config_home)
-            .env("MOUSE_PROFILES_INSTANCE", "test");
+            .env("MOUSEKIT_INSTANCE", "test");
         command
     }
 
@@ -168,7 +168,7 @@ fn expect_key(output: &mut Device, code: KeyCode, value: i32) {
 #[ignore = "needs /dev/uinput and the udev rule; run by hand"]
 fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
     let temp = std::env::temp_dir().join(format!("mp-test-{}", std::process::id()));
-    let config_dir = temp.join("config/mouse-profiles");
+    let config_dir = temp.join("config/mousekit");
     fs::create_dir_all(config_dir.join("profiles")).unwrap();
     fs::write(
         config_dir.join("config.toml"),
@@ -192,7 +192,7 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
     let child = Command::new(BINARY)
         .arg("daemon")
         .env("XDG_CONFIG_HOME", temp.join("config"))
-        .env("MOUSE_PROFILES_INSTANCE", "test")
+        .env("MOUSEKIT_INSTANCE", "test")
         .stderr(Stdio::inherit())
         .spawn()
         .expect("start the daemon");
@@ -325,9 +325,9 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
             .args([
                 "--user",
                 "call",
-                "io.github.mouseprofiles.Daemon.test",
-                "/io/github/mouseprofiles/Daemon",
-                "io.github.mouseprofiles.Daemon1",
+                "io.github.jakebrace.mousekit.test",
+                "/io/github/jakebrace/mousekit",
+                "io.github.jakebrace.mousekit.Daemon1",
                 method,
                 signature,
             ])

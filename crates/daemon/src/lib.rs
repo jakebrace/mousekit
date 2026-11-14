@@ -29,9 +29,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mouse_profiles_core::{Engine, Event, HardwareInfo, Trigger, Window};
-use mouse_profiles_focus::{FocusBackend, FocusEvent};
-use mouse_profiles_input::{Mouse, NodeInfo, VirtualMouse, list_nodes};
+use mousekit_core::{Engine, Event, HardwareInfo, Trigger, Window};
+use mousekit_focus::{FocusBackend, FocusEvent};
+use mousekit_input::{Mouse, NodeInfo, VirtualMouse, list_nodes};
 
 use crate::load::Loaded;
 
@@ -111,20 +111,20 @@ pub(crate) fn lock(shared: &Shared) -> MutexGuard<'_, State> {
 }
 
 pub(crate) fn log(message: &str) {
-    eprintln!("mouse-profiles: {message}");
+    eprintln!("mousekit: {message}");
 }
 
-/// Set by tests (`MOUSE_PROFILES_INSTANCE=test`) to run a second, isolated
+/// Set by tests (`MOUSEKIT_INSTANCE=test`) to run a second, isolated
 /// daemon: its own bus name and virtual device, and no tray, focus backend
 /// or autostart file. Never set in normal use.
 pub(crate) fn instance() -> Option<String> {
-    std::env::var(mouse_profiles_core::dbus::INSTANCE_VARIABLE)
+    std::env::var(mousekit_core::dbus::INSTANCE_VARIABLE)
         .ok()
         .filter(|name| !name.is_empty())
 }
 
 /// Runs the daemon. Returns only on a startup error; after that it runs
-/// until `mouse-profiles quit` or the process is killed.
+/// until `mousekit quit` or the process is killed.
 pub fn run() -> Result<(), String> {
     let config_dir = load::config_dir()?;
     let loaded = load::load(&config_dir)?;
@@ -161,7 +161,7 @@ pub fn run() -> Result<(), String> {
 
     let focus_backend: Option<Arc<dyn FocusBackend>> = match isolated {
         Some(_) => None,
-        None => mouse_profiles_focus::detect().map(Arc::from),
+        None => mousekit_focus::detect().map(Arc::from),
     };
     let focus_status = match &focus_backend {
         Some(backend) => backend.name().to_string(),

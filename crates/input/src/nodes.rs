@@ -4,7 +4,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use mouse_profiles_core::DeviceId;
+use mousekit_core::DeviceId;
 
 /// One /dev/input/eventN node, described from sysfs. Reading sysfs needs no
 /// permission on the node itself, so this works before the udev rule has

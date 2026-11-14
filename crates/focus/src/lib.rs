@@ -8,7 +8,7 @@ mod kde;
 
 use std::path::Path;
 
-pub use mouse_profiles_core::{Window, WindowKind};
+pub use mousekit_core::{Window, WindowKind};
 
 /// What a backend reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,10 +38,10 @@ pub trait FocusBackend: Send + Sync {
 
 /// Picks the backend for the running desktop, if there is one.
 ///
-/// Setting `MOUSE_PROFILES_FOCUS=none` disables focus switching, which tests
+/// Setting `MOUSEKIT_FOCUS=none` disables focus switching, which tests
 /// use to stay out of the real desktop.
 pub fn detect() -> Option<Box<dyn FocusBackend>> {
-    if std::env::var_os("MOUSE_PROFILES_FOCUS").is_some_and(|value| value == "none") {
+    if std::env::var_os("MOUSEKIT_FOCUS").is_some_and(|value| value == "none") {
         return None;
     }
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();

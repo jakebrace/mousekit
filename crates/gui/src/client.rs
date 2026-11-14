@@ -1,8 +1,8 @@
 //! The GUI's only link to the outside world: calls to the daemon's D-Bus
 //! interface. The GUI never opens devices or config files itself.
 
-use mouse_profiles_core::dbus::{BUS_NAME, INSTANCE_VARIABLE, INTERFACE, OBJECT_PATH};
-use mouse_profiles_core::{DeviceConfig, Macro, Profile, Snapshot};
+use mousekit_core::dbus::{BUS_NAME, INSTANCE_VARIABLE, INTERFACE, OBJECT_PATH};
+use mousekit_core::{DeviceConfig, Macro, Profile, Snapshot};
 use zbus::blocking::Connection;
 use zbus::zvariant::{DynamicDeserialize, DynamicType};
 
@@ -45,7 +45,7 @@ impl Client {
             .map_err(|error| match error {
                 zbus::Error::MethodError(name, message, _) => {
                     if name.as_str() == "org.freedesktop.DBus.Error.ServiceUnknown" {
-                        "The mouse-profiles daemon is not running.".to_string()
+                        "The mousekit daemon is not running.".to_string()
                     } else {
                         message.unwrap_or_else(|| name.to_string())
                     }

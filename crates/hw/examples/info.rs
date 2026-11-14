@@ -1,13 +1,13 @@
 //! Prints the mouse's sensor settings. Read-only: changes nothing.
 //!
-//!     cargo run -p mouse-profiles-hw --example info -- 046d:409f
+//!     cargo run -p mousekit-hw --example info -- 046d:409f
 
 fn main() {
     let Some(id) = std::env::args().nth(1).and_then(|text| text.parse().ok()) else {
         eprintln!("usage: info VENDOR:PRODUCT   (for example 046d:409f)");
         std::process::exit(2);
     };
-    match mouse_profiles_hw::open(&[id]) {
+    match mousekit_hw::open(&[id]) {
         Ok(Some(mut hardware)) => match hardware.info() {
             Ok(info) => {
                 println!("DPI: {}", info.dpi);

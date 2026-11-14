@@ -1,16 +1,14 @@
 //! Reading config files from disk and turning them into engine tables.
-//! The parsing and rules live in `mouse-profiles-core`; this is the file I/O.
+//! The parsing and rules live in `mousekit-core`; this is the file I/O.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use mouse_profiles_core::profile::ResolvedProfile;
-use mouse_profiles_core::{
-    Action, Config, Macro, Profile, Step, check_macros, check_profiles, resolve,
-};
-use mouse_profiles_input::VirtualMouse;
+use mousekit_core::profile::ResolvedProfile;
+use mousekit_core::{Action, Config, Macro, Profile, Step, check_macros, check_profiles, resolve};
+use mousekit_input::VirtualMouse;
 
 /// The result of loading the config directory.
 pub struct Loaded {
@@ -49,13 +47,13 @@ impl Loaded {
     }
 }
 
-/// `$XDG_CONFIG_HOME/mouse-profiles`, normally `~/.config/mouse-profiles`.
+/// `$XDG_CONFIG_HOME/mousekit`, normally `~/.config/mousekit`.
 pub fn config_dir() -> Result<PathBuf, String> {
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
-        return Ok(PathBuf::from(dir).join("mouse-profiles"));
+        return Ok(PathBuf::from(dir).join("mousekit"));
     }
     match std::env::var_os("HOME") {
-        Some(home) => Ok(PathBuf::from(home).join(".config/mouse-profiles")),
+        Some(home) => Ok(PathBuf::from(home).join(".config/mousekit")),
         None => Err("neither XDG_CONFIG_HOME nor HOME is set".into()),
     }
 }

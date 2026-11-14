@@ -1,6 +1,6 @@
 //! Deciding which profile a focused window calls for.
 //!
-//! The compositor-specific code in `mouse-profiles-focus` turns whatever the
+//! The compositor-specific code in `mousekit-focus` turns whatever the
 //! desktop reports into a [`Window`]; everything after that is decided here.
 
 use std::collections::HashMap;

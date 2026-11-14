@@ -4,8 +4,8 @@
 
 use std::time::{Duration, Instant};
 
-use mouse_profiles_core::event::{EV_MSC, REL_HWHEEL_HI_RES, REL_WHEEL_HI_RES};
-use mouse_profiles_core::{Decision, Event, Key, Trigger, Window, WindowKind, decide};
+use mousekit_core::event::{EV_MSC, REL_HWHEEL_HI_RES, REL_WHEEL_HI_RES};
+use mousekit_core::{Decision, Event, Key, Trigger, Window, WindowKind, decide};
 
 use crate::{CaptureSession, Shared, State, autostart, load, lock, log};
 
@@ -183,7 +183,7 @@ impl State {
             if self.paused { "paused" } else { "active" }
         )];
         let mode = match self.override_profile {
-            Some(_) => " (chosen by hand; `mouse-profiles profile auto` to undo)",
+            Some(_) => " (chosen by hand; `mousekit profile auto` to undo)",
             None => "",
         };
         lines.push(format!(

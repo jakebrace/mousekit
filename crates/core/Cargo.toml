@@ -1,12 +1,12 @@
 [package]
-name = "mouse-profiles-core"
+name = "mousekit-core"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
 [lib]
-name = "mouse_profiles_core"
+name = "mousekit_core"
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }

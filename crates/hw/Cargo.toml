@@ -1,14 +1,14 @@
 [package]
-name = "mouse-profiles-hw"
+name = "mousekit-hw"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
 [lib]
-name = "mouse_profiles_hw"
+name = "mousekit_hw"
 
 [dependencies]
-mouse-profiles-core = { path = "../core" }
+mousekit-core = { path = "../core" }
 # For poll(): waiting for a reply from the mouse with a timeout.
 rustix = { version = "1.1.6", features = ["event"] }

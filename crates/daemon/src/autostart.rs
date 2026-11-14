@@ -10,7 +10,7 @@ fn entry_path() -> Result<PathBuf, String> {
         Some(dir) => PathBuf::from(dir),
         None => PathBuf::from(std::env::var_os("HOME").ok_or("HOME is not set")?).join(".config"),
     };
-    Ok(config_home.join("autostart/mouse-profiles.desktop"))
+    Ok(config_home.join("autostart/mousekit.desktop"))
 }
 
 /// Creates, updates or removes the autostart entry to match `enabled`.
@@ -36,7 +36,7 @@ pub(crate) fn sync(enabled: bool) -> Result<Option<String>, String> {
     let wanted = format!(
         "[Desktop Entry]\n\
          Type=Application\n\
-         Name=Mouse Profiles\n\
+         Name=MouseKit\n\
          Comment=Per-application mouse button remapping\n\
          Exec=\"{}\" daemon\n\
          Icon=input-mouse\n\

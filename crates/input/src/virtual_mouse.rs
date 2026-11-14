@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use evdev::uinput::VirtualDevice;
 use evdev::{AttributeSet, BusType, InputEvent, InputId, KeyCode, MiscCode, RelativeAxisCode};
-use mouse_profiles_core::event::{EV_KEY, EV_MSC, EV_REL};
-use mouse_profiles_core::{Event, Key};
+use mousekit_core::event::{EV_KEY, EV_MSC, EV_REL};
+use mousekit_core::{Event, Key};
 
 /// Fixed identity. The desktop stores pointer settings (acceleration) per
 /// device name and ID, so these must not change between runs.
@@ -23,7 +23,7 @@ pub struct VirtualMouse {
 
 impl VirtualMouse {
     /// The name the real daemon uses.
-    pub const NAME: &'static str = "mouse-profiles virtual mouse";
+    pub const NAME: &'static str = "mousekit virtual mouse";
 
     /// Creates the device. It can emit every key [`VirtualMouse::can_emit`]
     /// accepts plus pointer motion and both scroll wheels, so it never has to

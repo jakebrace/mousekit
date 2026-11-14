@@ -12,12 +12,11 @@ use zbus::interface;
 use crate::{FocusBackend, FocusEvent, OnFocus, Window, WindowKind, exe_name};
 
 /// This backend's own name on the session bus, separate from the daemon's
-/// control interface. Must match SERVICE in focus.js. A placeholder until
-/// the project's app ID is settled.
-const BUS_NAME: &str = "io.github.mouseprofiles.FocusListener";
+/// control interface. Must match SERVICE in focus.js.
+const BUS_NAME: &str = "io.github.jakebrace.mousekit.Focus";
 const OBJECT_PATH: &str = "/Focus";
 /// The name KWin knows the script by, used to unload a stale copy.
-const SCRIPT_NAME: &str = "mouse-profiles-focus";
+const SCRIPT_NAME: &str = "mousekit-focus";
 /// KWin loads scripts from a file, so the embedded script is written out
 /// at startup.
 const SCRIPT_SOURCE: &str = include_str!("focus.js");
@@ -52,7 +51,7 @@ struct Listener {
     on_focus: OnFocus,
 }
 
-#[interface(name = "io.github.mouseprofiles.Focus")]
+#[interface(name = "io.github.jakebrace.mousekit.Focus1")]
 impl Listener {
     fn focus_changed(&self, class: &str, title: &str, pid: &str, kind: &str) {
         let kind = match kind {
@@ -126,10 +125,10 @@ fn run(on_focus: OnFocus) -> Result<(), String> {
             }
         }
         match result {
-            Ok(()) => eprintln!("mouse-profiles: KWin restarted; focus script reloaded"),
-            Err(error) => eprintln!(
-                "mouse-profiles: KWin restarted but the focus script did not reload: {error}"
-            ),
+            Ok(()) => eprintln!("mousekit: KWin restarted; focus script reloaded"),
+            Err(error) => {
+                eprintln!("mousekit: KWin restarted but the focus script did not reload: {error}")
+            }
         }
     }
     Err("lost the connection to the session bus".into())
