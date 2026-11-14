@@ -77,6 +77,22 @@ pub(crate) fn start_sync(shared: &Shared, device_index: usize) {
     std::thread::spawn(move || sync(&shared, device_index));
 }
 
+/// Called when the computer wakes from sleep. The mouse or its receiver may
+/// have lost power and fallen back to its own stored DPI, without the input
+/// device ever disappearing, so nothing else would notice. Treats every
+/// mouse's settings as unknown and applies the config again; a mouse that
+/// is not answering yet is retried once it is used.
+pub(crate) fn resync_all(shared: &Shared) {
+    let count = {
+        let mut state = lock(shared);
+        state.hardware.fill(None);
+        state.hardware.len()
+    };
+    for device_index in 0..count {
+        start_sync(shared, device_index);
+    }
+}
+
 /// True when the mouse's settings are still unknown and it is time for
 /// another attempt. Claims the attempt, so only one caller gets `true`.
 pub(crate) fn retry_is_due(state: &mut State, device_index: usize) -> bool {

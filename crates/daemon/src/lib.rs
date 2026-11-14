@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use mousekit_core::{Engine, Event, HardwareInfo, Trigger, Window};
 use mousekit_focus::{FocusBackend, FocusEvent};
@@ -38,6 +38,9 @@ use crate::load::Loaded;
 /// How often to look for mice appearing. Reading a directory once a second
 /// costs nothing measurable; a udev monitor can replace it later.
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
+/// How far the wall clock must run ahead of the time spent awake, between
+/// two scans, to count as having slept.
+const RESUME_GAP: Duration = Duration::from_secs(5);
 
 /// How long to wait before trying a failed focus backend again. At login the
 /// daemon can start before the window manager is ready.
@@ -295,7 +298,18 @@ fn watch_for_mice(shared: Shared) -> ! {
     // Remember the last error so a persistent problem (no udev rule) is
     // logged once, not every second.
     let mut last_error: Option<(PathBuf, String)> = None;
+    // `Instant` stands still while the computer sleeps and the wall clock
+    // does not, so the wall clock running ahead means we just woke up.
+    let mut tick = (Instant::now(), SystemTime::now());
     loop {
+        let now = (Instant::now(), SystemTime::now());
+        let awake = now.0.duration_since(tick.0);
+        let passed = now.1.duration_since(tick.1).unwrap_or_default();
+        tick = now;
+        if passed > awake + RESUME_GAP {
+            log("woke from sleep; applying DPI and report rate again");
+            hardware::resync_all(&shared);
+        }
         match list_nodes() {
             Ok(nodes) => {
                 for node in nodes {
