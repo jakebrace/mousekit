@@ -8,3 +8,5 @@ publish.workspace = true
 name = "mouse_profiles_focus"
 
 [dependencies]
+mouse-profiles-core = { path = "../core" }
+zbus = "6.2.1"

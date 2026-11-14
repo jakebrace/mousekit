@@ -204,7 +204,17 @@ mod tests {
         let default =
             Profile::from_toml(include_str!("../../../docs/examples/profiles/default.toml"))
                 .unwrap();
-        let (resolved, warnings) = resolve(&config.devices[0], &default, None).unwrap();
+        let deadlock = Profile::from_toml(include_str!(
+            "../../../docs/examples/profiles/deadlock.toml"
+        ))
+        .unwrap();
+        let device = &config.devices[0];
+
+        let (resolved, warnings) = resolve(device, &default, None).unwrap();
+        assert_eq!(warnings, Vec::<String>::new());
+        assert!(resolved.actions.is_empty());
+
+        let (resolved, warnings) = resolve(device, &default, Some(&deadlock)).unwrap();
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(
             resolved.actions[&Trigger::Key(key("BTN_SIDE"))],

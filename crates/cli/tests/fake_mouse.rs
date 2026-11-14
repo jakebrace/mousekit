@@ -8,8 +8,8 @@
 //!
 //!     cargo test -p mouse-profiles --test fake_mouse -- --ignored
 //!
-//! Stop any running mouse-profiles daemon first; the test looks the virtual
-//! device up by name and would find the wrong one.
+//! It is safe to run while a real daemon is in use: the test daemon gets its
+//! own config, socket and virtual device name, and no focus backend.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ use evdev::{
 
 const BINARY: &str = env!("CARGO_BIN_EXE_mouse-profiles");
 const FAKE_NAME: &str = "mouse-profiles test mouse";
-const OUTPUT_NAME: &str = "mouse-profiles virtual mouse";
+const OUTPUT_NAME: &str = "mouse-profiles test output";
 const TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Kills the daemon even when an assertion fails, so a failed test never
@@ -191,6 +191,9 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
         .arg("daemon")
         .env("XDG_CONFIG_HOME", temp.join("config"))
         .env("XDG_RUNTIME_DIR", &runtime_dir)
+        // Keep the test out of the real desktop's window manager.
+        .env("MOUSE_PROFILES_FOCUS", "none")
+        .env("MOUSE_PROFILES_VIRTUAL_NAME", OUTPUT_NAME)
         .stderr(Stdio::inherit())
         .spawn()
         .expect("start the daemon");

@@ -1,0 +1,17 @@
+# ~/.config/mouse-profiles/profiles/deadlock.toml
+# Any file in profiles/ other than default.toml is an app profile. It becomes
+# active while a matching window has focus.
+
+name = "Deadlock"
+
+[match]
+# The window class of the game. To find a window's class: focus the window
+# for a moment, then run `mouse-profiles status` in a terminal. It lists the
+# recently focused windows with their classes.
+window_class = ["steam_app_1422450"]
+
+[bindings]
+# Back thumb button sends numpad 7. Numpad keys make good spare keys for
+# games. F13-F24 only work if the desktop's keyboard option "Use F13-F24 as
+# usual function keys" is on; by default they are media keys games ignore.
+M4 = { type = "key", keys = ["KEY_KP7"] }

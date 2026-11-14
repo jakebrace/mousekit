@@ -7,17 +7,36 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mouse_profiles_core::profile::ResolvedProfile;
-use mouse_profiles_core::{Action, Config, Profile, resolve};
+use mouse_profiles_core::{Action, Config, Profile, check_profiles, resolve};
 use mouse_profiles_input::VirtualMouse;
 
 /// The result of loading the config directory.
 pub struct Loaded {
     pub config: Config,
-    /// The default profile resolved for each device, same order as
-    /// `config.devices`.
-    pub profiles: Vec<Arc<ResolvedProfile>>,
+    pub default: Profile,
+    /// App-specific profiles, sorted by file name.
+    pub profiles: Vec<Profile>,
+    /// Engine tables: `tables[device][0]` is the default profile for that
+    /// device and `tables[device][i + 1]` is `profiles[i]` layered over it.
+    tables: Vec<Vec<Arc<ResolvedProfile>>>,
     /// Problems that did not stop loading.
     pub warnings: Vec<String>,
+}
+
+impl Loaded {
+    /// The engine table for one device. `active` is an index into
+    /// `profiles`, or `None` for the default profile.
+    pub fn table(&self, device: usize, active: Option<usize>) -> Arc<ResolvedProfile> {
+        let slot = active.map_or(0, |index| index + 1);
+        self.tables[device][slot].clone()
+    }
+
+    pub fn profile_name(&self, active: Option<usize>) -> &str {
+        match active {
+            Some(index) => &self.profiles[index].name,
+            None => &self.default.name,
+        }
+    }
 }
 
 /// `$XDG_CONFIG_HOME/mouse-profiles`, normally `~/.config/mouse-profiles`.
@@ -31,8 +50,9 @@ pub fn config_dir() -> Result<PathBuf, String> {
     }
 }
 
-/// Reads `config.toml` and `profiles/default.toml` from `dir`.
-/// Other profile files are ignored until Milestone 2.
+/// Reads `config.toml` and every `profiles/*.toml` from `dir`.
+/// `profiles/default.toml` is the default profile; every other file is an
+/// app-specific profile.
 pub fn load(dir: &Path) -> Result<Loaded, String> {
     let config_path = dir.join("config.toml");
     let text = fs::read_to_string(&config_path).map_err(|error| {
@@ -56,40 +76,96 @@ pub fn load(dir: &Path) -> Result<Loaded, String> {
         ));
     }
 
-    let default_path = dir.join("profiles/default.toml");
-    let default = match fs::read_to_string(&default_path) {
-        Ok(text) => Profile::from_toml(&text)
-            .map_err(|error| format!("{}: {error}", default_path.display()))?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+    let profiles_dir = dir.join("profiles");
+    let default_path = profiles_dir.join("default.toml");
+    let default = match read_profile(&default_path) {
+        Ok(profile) => profile,
+        Err(ReadError::Missing) => {
             warnings.push(format!(
                 "no default profile at {}; every button passes through",
                 default_path.display()
             ));
             Profile::from_toml("name = \"Default\"").expect("built-in profile is valid")
         }
-        Err(error) => return Err(format!("cannot read {}: {error}", default_path.display())),
+        Err(ReadError::Other(message)) => return Err(message),
     };
 
+    let mut paths: Vec<PathBuf> = match fs::read_dir(&profiles_dir) {
+        Ok(entries) => entries
+            .filter_map(|entry| Some(entry.ok()?.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "toml"))
+            .filter(|path| *path != default_path)
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    paths.sort();
     let mut profiles = Vec::new();
-    for device in &config.devices {
-        let (resolved, mut resolve_warnings) = resolve(device, &default, None)
-            .map_err(|error| format!("{}: {error}", default_path.display()))?;
-        warnings.append(&mut resolve_warnings);
-        for action in resolved.actions.values() {
-            let Action::Keys(keys) = action else { continue };
-            for key in keys.iter().filter(|key| !VirtualMouse::can_emit(**key)) {
-                warnings.push(format!(
-                    "profile \"{}\": {key} cannot be emitted by the virtual device and will do nothing",
-                    resolved.name
-                ));
-            }
+    for path in &paths {
+        match read_profile(path) {
+            Ok(profile) => profiles.push(profile),
+            // Deleted between listing and reading; nothing to load.
+            Err(ReadError::Missing) => {}
+            Err(ReadError::Other(message)) => return Err(message),
         }
-        profiles.push(Arc::new(resolved));
     }
+    check_profiles(&default, &profiles)
+        .map_err(|error| format!("{}: {error}", profiles_dir.display()))?;
+    for profile in &profiles {
+        if profile.matches.window_class.is_empty() && profile.matches.exe.is_empty() {
+            warnings.push(format!(
+                "profile \"{}\" has no [match] rules, so it will never activate",
+                profile.name
+            ));
+        }
+    }
+
+    let mut tables = Vec::new();
+    for device in &config.devices {
+        let mut device_tables = Vec::new();
+        let overlays = std::iter::once(None).chain(profiles.iter().map(Some));
+        for overlay in overlays {
+            let (resolved, mut resolve_warnings) = resolve(device, &default, overlay)
+                .map_err(|error| format!("{}: {error}", profiles_dir.display()))?;
+            warnings.append(&mut resolve_warnings);
+            for action in resolved.actions.values() {
+                let Action::Keys(keys) = action else { continue };
+                for key in keys.iter().filter(|key| !VirtualMouse::can_emit(**key)) {
+                    warnings.push(format!(
+                        "{key} cannot be emitted by the virtual device and will do nothing"
+                    ));
+                }
+            }
+            device_tables.push(Arc::new(resolved));
+        }
+        tables.push(device_tables);
+    }
+    // The default profile's bindings are resolved once per overlay, so the
+    // same warning can come up several times.
+    warnings.sort();
+    warnings.dedup();
 
     Ok(Loaded {
         config,
+        default,
         profiles,
+        tables,
         warnings,
     })
+}
+
+enum ReadError {
+    Missing,
+    Other(String),
+}
+
+fn read_profile(path: &Path) -> Result<Profile, ReadError> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            ReadError::Missing
+        } else {
+            ReadError::Other(format!("cannot read {}: {error}", path.display()))
+        }
+    })?;
+    Profile::from_toml(&text)
+        .map_err(|error| ReadError::Other(format!("{}: {error}", path.display())))
 }

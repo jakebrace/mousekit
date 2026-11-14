@@ -10,3 +10,4 @@ name = "mouse_profiles_daemon"
 [dependencies]
 mouse-profiles-core = { path = "../core" }
 mouse-profiles-input = { path = "../input" }
+mouse-profiles-focus = { path = "../focus" }

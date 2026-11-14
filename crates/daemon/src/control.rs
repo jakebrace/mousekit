@@ -76,17 +76,24 @@ fn handle(command: &str, shared: &Shared) -> String {
                 "remapping: {}",
                 if state.paused { "paused" } else { "active" }
             )];
-            for (device, profile) in state
-                .loaded
-                .config
-                .devices
-                .iter()
-                .zip(&state.loaded.profiles)
-            {
+            lines.push(format!(
+                "profile: {}",
+                state.loaded.profile_name(state.active_profile)
+            ));
+            lines.push(format!("focus switching: {}", state.focus_status));
+            if !state.recent.is_empty() {
+                lines.push("recent windows (newest first):".into());
+            }
+            for window in &state.recent {
                 lines.push(format!(
-                    "device: {}  profile: {}",
-                    device.name, profile.name
+                    "  class \"{}\"  program \"{}\"  title \"{}\"",
+                    window.class,
+                    window.exe.as_deref().unwrap_or("?"),
+                    window.title
                 ));
+            }
+            for device in &state.loaded.config.devices {
+                lines.push(format!("device: {}", device.name));
             }
             if state.active.is_empty() {
                 lines.push("connected: none".into());
@@ -125,11 +132,16 @@ fn handle(command: &str, shared: &Shared) -> String {
             if !same_devices {
                 return "the [[device]] list changed; restart the daemon to apply it".into();
             }
-            // Held buttons keep what they emitted; the engine handles that.
-            for (engine, profile) in state.engines.iter_mut().zip(&loaded.profiles) {
-                engine.set_profile(profile.clone());
-            }
-            let mut reply = vec!["reloaded".to_string()];
+            // Stay on the same profile if it still exists under the same name.
+            let active_name = state.loaded.profile_name(state.active_profile).to_string();
+            let active = loaded
+                .profiles
+                .iter()
+                .position(|profile| profile.name == active_name);
+            let mut reply = vec![format!(
+                "reloaded ({} app profile(s))",
+                loaded.profiles.len()
+            )];
             reply.extend(
                 loaded
                     .warnings
@@ -137,11 +149,16 @@ fn handle(command: &str, shared: &Shared) -> String {
                     .map(|warning| format!("warning: {warning}")),
             );
             state.loaded = loaded;
+            // Held buttons keep what they emitted; the engine handles that.
+            state.apply_profile(active);
             log("config reloaded");
             reply.join("\n")
         }
         "quit" => {
             state.release_everything();
+            if let Some(backend) = &state.focus_backend {
+                backend.cleanup();
+            }
             "stopping".into()
         }
         other => format!("unknown command \"{other}\""),
