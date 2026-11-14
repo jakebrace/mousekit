@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::DeviceConfig;
 use crate::error::ConfigError;
+use crate::macros::Macro;
 use crate::profile::Profile;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -21,6 +22,8 @@ pub struct Snapshot {
     /// App-specific profiles.
     #[serde(default)]
     pub profiles: Vec<Profile>,
+    #[serde(default)]
+    pub macros: Vec<Macro>,
     #[serde(default)]
     pub devices: Vec<DeviceSnapshot>,
     /// Application windows open right now, for the "add from running
@@ -75,6 +78,12 @@ mod tests {
             focus_status: "kde".into(),
             default_profile: default,
             profiles: vec![deadlock],
+            macros: vec![
+                Macro::from_toml(
+                    "name = \"combo\"\n[[step]]\ntype = \"key_down\"\nkey = \"KEY_B\"\n[[step]]\ntype = \"delay\"\nms = 25\n",
+                )
+                .unwrap(),
+            ],
             devices: config
                 .devices
                 .into_iter()
@@ -93,6 +102,7 @@ mod tests {
 
         let empty = Snapshot {
             profiles: Vec::new(),
+            macros: Vec::new(),
             devices: Vec::new(),
             windows: Vec::new(),
             ..snapshot

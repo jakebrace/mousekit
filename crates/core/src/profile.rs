@@ -5,12 +5,14 @@
 //! "event BTN_SIDE does X".
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::config::DeviceConfig;
 use crate::error::ConfigError;
 use crate::event::{Key, Trigger};
+use crate::macros::{Macro, Step};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -40,7 +42,7 @@ pub enum Binding {
     Key { keys: Vec<Key> },
     /// A literal mouse button code.
     MouseButton { button: Key },
-    /// A stored macro. Parsed now, played from Milestone 5.
+    /// A stored macro, by name.
     Macro {
         name: String,
         #[serde(default)]
@@ -55,9 +57,14 @@ pub enum Binding {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MacroMode {
+    /// Play once per press, to the end, even if the button is released.
     #[default]
     Once,
+    /// Play again and again while the button is held; the pass in progress
+    /// finishes after release.
     RepeatWhileHeld,
+    /// First press starts repeating, the next press stops it after the pass
+    /// in progress.
     Toggle,
 }
 
@@ -110,6 +117,8 @@ pub enum Action {
     Keys(Vec<Key>),
     /// Swallow the event.
     Disabled,
+    /// Play these macro steps.
+    Macro { steps: Arc<[Step]>, mode: MacroMode },
 }
 
 /// A profile flattened against one mouse: ready for the engine.
@@ -125,13 +134,14 @@ pub struct ResolvedProfile {
 /// control the overlay does not mention keeps the default's binding.
 ///
 /// Returns the table plus warnings for things that are skipped but not fatal
-/// (a label this mouse does not have, a macro before macros exist). Any
+/// (a label this mouse does not have, a macro that does not exist). Any
 /// binding on left click is an error, because a bad one locks you out of
 /// your desktop.
 pub fn resolve(
     device: &DeviceConfig,
     default: &Profile,
     overlay: Option<&Profile>,
+    macros: &[Macro],
 ) -> Result<(ResolvedProfile, Vec<String>), ConfigError> {
     let mut actions = HashMap::new();
     let mut warnings = Vec::new();
@@ -165,11 +175,22 @@ pub fn resolve(
                 Binding::Passthrough => {
                     actions.remove(&trigger);
                 }
-                Binding::Macro { name, .. } => {
-                    warnings.push(format!(
-                        "profile \"{}\": macro \"{name}\" on \"{label}\" is ignored; macros are not implemented yet",
-                        profile.name
-                    ));
+                Binding::Macro { name, mode } => {
+                    match macros.iter().find(|candidate| candidate.name == *name) {
+                        Some(found) => {
+                            actions.insert(
+                                trigger,
+                                Action::Macro {
+                                    steps: found.steps.clone().into(),
+                                    mode: *mode,
+                                },
+                            );
+                        }
+                        None => warnings.push(format!(
+                            "profile \"{}\": \"{label}\" uses macro \"{name}\", which does not exist; binding ignored",
+                            profile.name
+                        )),
+                    }
                 }
             }
         }
@@ -226,11 +247,11 @@ mod tests {
         .unwrap();
         let device = &config.devices[0];
 
-        let (resolved, warnings) = resolve(device, &default, None).unwrap();
+        let (resolved, warnings) = resolve(device, &default, None, &[]).unwrap();
         assert_eq!(warnings, Vec::<String>::new());
         assert!(resolved.actions.is_empty());
 
-        let (resolved, warnings) = resolve(device, &default, Some(&deadlock)).unwrap();
+        let (resolved, warnings) = resolve(device, &default, Some(&deadlock), &[]).unwrap();
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(
             resolved.actions[&Trigger::Key(key("BTN_SIDE"))],
@@ -327,7 +348,7 @@ mod tests {
         )
         .unwrap();
 
-        let (resolved, warnings) = resolve(&device(), &default, Some(&game)).unwrap();
+        let (resolved, warnings) = resolve(&device(), &default, Some(&game), &[]).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(resolved.name, "Game");
         // Inherited from the default.
@@ -349,8 +370,30 @@ mod tests {
         for binding in ["{ type = \"disabled\" }", "{ type = \"passthrough\" }"] {
             let profile =
                 Profile::from_toml(&format!("name = \"x\"\n[bindings]\nLMB = {binding}")).unwrap();
-            let error = resolve(&device(), &profile, None).unwrap_err();
+            let error = resolve(&device(), &profile, None, &[]).unwrap_err();
             assert!(error.to_string().contains("left click"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_macro_binding_resolves_to_the_macros_steps() {
+        let combo = Macro::from_toml(
+            "name = \"combo\"\n[[step]]\ntype = \"key_down\"\nkey = \"KEY_B\"\n[[step]]\ntype = \"key_up\"\nkey = \"KEY_B\"\n",
+        )
+        .unwrap();
+        let profile = Profile::from_toml(
+            "name = \"x\"\n[bindings]\nM4 = { type = \"macro\", name = \"combo\", mode = \"toggle\" }",
+        )
+        .unwrap();
+        let (resolved, warnings) =
+            resolve(&device(), &profile, None, std::slice::from_ref(&combo)).unwrap();
+        assert!(warnings.is_empty());
+        match &resolved.actions[&Trigger::Key(key("BTN_SIDE"))] {
+            Action::Macro { steps, mode } => {
+                assert_eq!(steps[..], combo.steps[..]);
+                assert_eq!(*mode, MacroMode::Toggle);
+            }
+            other => panic!("expected a macro, got {other:?}"),
         }
     }
 
@@ -365,7 +408,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let (resolved, warnings) = resolve(&device(), &profile, None).unwrap();
+        let (resolved, warnings) = resolve(&device(), &profile, None, &[]).unwrap();
         assert!(resolved.actions.is_empty());
         assert_eq!(warnings.len(), 2);
     }

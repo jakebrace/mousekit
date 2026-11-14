@@ -305,6 +305,88 @@ pub fn presets() -> Vec<Preset> {
     ]
 }
 
+/// The kernel key for a physical keyboard key as the window toolkit
+/// reports it, used by the macro recorder. Physical keys are used rather
+/// than the characters they type, so a recording does not depend on the
+/// keyboard layout.
+pub fn from_physical(code: iced::keyboard::key::Code) -> Option<Key> {
+    const TABLE: &[(&str, &str)] = &[
+        ("Backquote", "GRAVE"),
+        ("Backslash", "BACKSLASH"),
+        ("BracketLeft", "LEFTBRACE"),
+        ("BracketRight", "RIGHTBRACE"),
+        ("Comma", "COMMA"),
+        ("Equal", "EQUAL"),
+        ("Minus", "MINUS"),
+        ("Period", "DOT"),
+        ("Quote", "APOSTROPHE"),
+        ("Semicolon", "SEMICOLON"),
+        ("Slash", "SLASH"),
+        ("AltLeft", "LEFTALT"),
+        ("AltRight", "RIGHTALT"),
+        ("Backspace", "BACKSPACE"),
+        ("CapsLock", "CAPSLOCK"),
+        ("ControlLeft", "LEFTCTRL"),
+        ("ControlRight", "RIGHTCTRL"),
+        ("Enter", "ENTER"),
+        ("SuperLeft", "LEFTMETA"),
+        ("SuperRight", "RIGHTMETA"),
+        ("ShiftLeft", "LEFTSHIFT"),
+        ("ShiftRight", "RIGHTSHIFT"),
+        ("Space", "SPACE"),
+        ("Tab", "TAB"),
+        ("Delete", "DELETE"),
+        ("End", "END"),
+        ("Home", "HOME"),
+        ("Insert", "INSERT"),
+        ("PageDown", "PAGEDOWN"),
+        ("PageUp", "PAGEUP"),
+        ("ArrowDown", "DOWN"),
+        ("ArrowLeft", "LEFT"),
+        ("ArrowRight", "RIGHT"),
+        ("ArrowUp", "UP"),
+        ("NumpadAdd", "KPPLUS"),
+        ("NumpadSubtract", "KPMINUS"),
+        ("NumpadMultiply", "KPASTERISK"),
+        ("NumpadDivide", "KPSLASH"),
+        ("NumpadDecimal", "KPDOT"),
+        ("NumpadEnter", "KPENTER"),
+        ("Escape", "ESC"),
+        ("PrintScreen", "SYSRQ"),
+        ("ScrollLock", "SCROLLLOCK"),
+        ("Pause", "PAUSE"),
+        ("NumLock", "NUMLOCK"),
+    ];
+    // The toolkit's names are regular: "KeyA", "Digit1", "F5", "Numpad7".
+    let name = format!("{code:?}");
+    let kernel = if let Some(letter) = name.strip_prefix("Key") {
+        letter.to_string()
+    } else if let Some(digit) = name.strip_prefix("Digit") {
+        digit.to_string()
+    } else if let Some(digit) = name.strip_prefix("Numpad")
+        && digit.len() == 1
+        && digit.chars().all(|c| c.is_ascii_digit())
+    {
+        format!("KP{digit}")
+    } else if let Some((_, kernel)) = TABLE.iter().find(|(toolkit, _)| *toolkit == name) {
+        kernel.to_string()
+    } else {
+        // Function keys ("F1".."F24") already match.
+        name
+    };
+    Key::from_name(&format!("KEY_{kernel}"))
+}
+
+/// A macro step in words: "Press B", "Release B", "Wait 40 ms".
+pub fn describe_step(step: &mouse_profiles_core::Step) -> String {
+    use mouse_profiles_core::Step;
+    match step {
+        Step::KeyDown { key } => format!("Press {}", friendly(*key)),
+        Step::KeyUp { key } => format!("Release {}", friendly(*key)),
+        Step::Delay { ms } => format!("Wait {ms} ms"),
+    }
+}
+
 /// What a control's event is, in words: "Back button", "Scroll up".
 pub fn describe_trigger(trigger: &Trigger) -> String {
     match trigger {
@@ -381,6 +463,20 @@ mod tests {
         let trigger = Trigger::Key(Key(0x119));
         assert_eq!(describe_trigger(&trigger), "Mouse button 10");
         assert_eq!(suggest_label(&trigger, &[]), "Button 1");
+    }
+
+    #[test]
+    fn physical_keys_map_to_kernel_keys() {
+        use iced::keyboard::key::Code;
+        assert_eq!(from_physical(Code::KeyB), Some(key("KEY_B")));
+        assert_eq!(from_physical(Code::Digit7), Some(key("KEY_7")));
+        assert_eq!(from_physical(Code::F5), Some(key("KEY_F5")));
+        assert_eq!(from_physical(Code::Numpad7), Some(key("KEY_KP7")));
+        assert_eq!(from_physical(Code::NumpadAdd), Some(key("KEY_KPPLUS")));
+        assert_eq!(from_physical(Code::ShiftLeft), Some(key("KEY_LEFTSHIFT")));
+        assert_eq!(from_physical(Code::Escape), Some(key("KEY_ESC")));
+        assert_eq!(from_physical(Code::ArrowUp), Some(key("KEY_UP")));
+        assert_eq!(from_physical(Code::Period), Some(key("KEY_DOT")));
     }
 
     #[test]

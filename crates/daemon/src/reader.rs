@@ -49,7 +49,13 @@ fn forward(shared: &Shared, device_index: usize, mouse: &mut Mouse) {
                 state.out.push(Event::SYN);
             }
             Frame::Complete => {
-                state.engines[device_index].process_frame(&frame, &mut state.out);
+                let now = state.started.elapsed();
+                let engine = &mut state.engines[device_index];
+                engine.process_frame(&frame, now, &mut state.out);
+                if engine.next_wake().is_some() {
+                    // A macro is playing; make sure the timer knows.
+                    let _ = state.macro_wake.send(());
+                }
             }
             Frame::Dropped => {
                 // Button state is unknown now; releasing everything is the

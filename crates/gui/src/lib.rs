@@ -10,12 +10,13 @@ mod client;
 mod keys;
 mod view;
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use iced::keyboard::{self, key};
 use iced::widget::combo_box;
 use iced::{Subscription, Task};
-use mouse_profiles_core::{Binding, Key, Profile, Snapshot, Trigger};
+use mouse_profiles_core::{Binding, Key, Macro, MacroMode, Profile, Snapshot, Step, Trigger};
 
 use crate::client::Client;
 use crate::keys::{Chord, KeyChoice, Preset};
@@ -40,6 +41,8 @@ pub(crate) enum Page {
     Device(usize),
     /// A profile, by name.
     Profile(String),
+    /// A macro, by name.
+    Macro(String),
 }
 
 /// The kinds of binding the editor offers for one control.
@@ -53,7 +56,6 @@ pub(crate) enum Kind {
     Keys,
     MouseButton,
     Disabled,
-    /// Macros arrive in a later version; existing ones are shown, not edited.
     Macro,
 }
 
@@ -73,7 +75,6 @@ pub(crate) enum Message {
     // Device page.
     StartCapture,
     StopCapture,
-    EscapePressed,
     MoveControl(String, Direction),
     BeginRename(String),
     RenameChanged(String),
@@ -103,6 +104,32 @@ pub(crate) enum Message {
     SetMainKey(KeyChoice),
     ApplyPreset(Preset),
     SetMouseButton(String, KeyChoice),
+    SetMacro(String, String),
+    SetMacroMode(String, MacroMode),
+
+    // Macros.
+    CreateMacro,
+    MacroNameChanged(String),
+    RenameMacro,
+    AskDeleteMacro,
+    ConfirmDeleteMacro,
+    StartRecording,
+    StopRecording,
+    Keyboard(keyboard::Event),
+    RemoveStep(usize),
+    MoveStep(usize, Direction),
+    StepDelayChanged(usize, String),
+    AddDelay,
+    AddKeyTap(KeyChoice),
+    DelayAllChanged(String),
+    SetAllDelays,
+}
+
+/// A macro being recorded from the keyboard.
+pub(crate) struct Recording {
+    pub steps: Vec<Step>,
+    /// When the last key event arrived, to measure the pause before the next.
+    last_event: Option<Instant>,
 }
 
 pub(crate) struct App {
@@ -129,6 +156,12 @@ pub(crate) struct App {
     /// Label of the control whose shortcut editor is open.
     pub editing_keys: Option<String>,
     pub key_choices: combo_box::State<KeyChoice>,
+
+    pub macro_name_draft: String,
+    pub recording: Option<Recording>,
+    /// Text being typed into a step's delay box, by step number.
+    pub delay_drafts: HashMap<usize, String>,
+    pub delay_all_draft: String,
 }
 
 impl App {
@@ -149,6 +182,10 @@ impl App {
             class_draft: String::new(),
             editing_keys: None,
             key_choices: combo_box::State::new(keys::main_key_choices()),
+            macro_name_draft: String::new(),
+            recording: None,
+            delay_drafts: HashMap::new(),
+            delay_all_draft: String::new(),
         };
         app.refresh();
         app
@@ -165,9 +202,12 @@ impl App {
                 self.offline = None;
                 // If the page's profile vanished (deleted or renamed
                 // elsewhere), fall back to the default profile.
-                if let Page::Profile(name) = &self.page
-                    && profile_in(&snapshot, name).is_none()
-                {
+                let gone = match &self.page {
+                    Page::Profile(name) => profile_in(&snapshot, name).is_none(),
+                    Page::Macro(name) => !snapshot.macros.iter().any(|m| m.name == *name),
+                    Page::Device(_) => false,
+                };
+                if gone {
                     self.open(Page::Profile(snapshot.default_profile.name.clone()));
                 }
                 self.snapshot = Some(snapshot);
@@ -203,9 +243,16 @@ impl App {
         self.show_window_picker = false;
         self.class_draft.clear();
         self.editing_keys = None;
+        self.recording = None;
+        self.delay_drafts.clear();
+        self.delay_all_draft.clear();
         self.profile_name_draft = match &page {
             Page::Profile(name) => name.clone(),
-            Page::Device(_) => String::new(),
+            _ => String::new(),
+        };
+        self.macro_name_draft = match &page {
+            Page::Macro(name) => name.clone(),
+            _ => String::new(),
         };
         self.page = page;
     }
@@ -238,6 +285,90 @@ impl App {
         }
     }
 
+    /// The macro the current page shows, if it is a macro page.
+    pub fn current_macro(&self) -> Option<&Macro> {
+        let Page::Macro(name) = &self.page else {
+            return None;
+        };
+        self.snapshot
+            .as_ref()?
+            .macros
+            .iter()
+            .find(|candidate| candidate.name == *name)
+    }
+
+    /// Applies a change to the current macro and saves it.
+    fn edit_macro(&mut self, change: impl FnOnce(&mut Macro)) {
+        let Some(mut edited) = self.current_macro().cloned() else {
+            return;
+        };
+        let original = edited.name.clone();
+        change(&mut edited);
+        let renamed_to = edited.name.clone();
+        if self.act(|client| client.save_macro(&original, &edited)) && renamed_to != original {
+            self.page = Page::Macro(renamed_to.clone());
+            self.macro_name_draft = renamed_to;
+        }
+    }
+
+    /// Adds one keyboard event to the recording in progress.
+    fn record(&mut self, event: keyboard::Event) {
+        let Some(recording) = &mut self.recording else {
+            return;
+        };
+        let (physical, pressed) = match event {
+            // Holding a key makes the keyboard repeat it; record it once.
+            keyboard::Event::KeyPressed { repeat: true, .. } => return,
+            keyboard::Event::KeyPressed { physical_key, .. } => (physical_key, true),
+            keyboard::Event::KeyReleased { physical_key, .. } => (physical_key, false),
+            keyboard::Event::ModifiersChanged(_) => return,
+        };
+        let key::Physical::Code(code) = physical else {
+            return;
+        };
+        let Some(key) = keys::from_physical(code) else {
+            return;
+        };
+        // A release with no press before it belongs to something typed
+        // before recording started.
+        let already_down = recording.steps.iter().fold(false, |down, step| match step {
+            Step::KeyDown { key: k } if *k == key => true,
+            Step::KeyUp { key: k } if *k == key => false,
+            _ => down,
+        });
+        if pressed == already_down {
+            return;
+        }
+        if recording.steps.len() + 2 > mouse_profiles_core::macros::MAX_STEPS {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(last) = recording.last_event {
+            let ms = now.duration_since(last).as_millis();
+            let ms = ms.min(u128::from(mouse_profiles_core::macros::MAX_DELAY_MS)) as u32;
+            if ms > 0 {
+                recording.steps.push(Step::Delay { ms });
+            }
+        }
+        recording.last_event = Some(now);
+        recording.steps.push(if pressed {
+            Step::KeyDown { key }
+        } else {
+            Step::KeyUp { key }
+        });
+    }
+
+    /// Escape backs out of whatever is open, capture first.
+    fn escape(&mut self) {
+        if self.capturing {
+            self.stop_capture();
+        } else if self.rename.is_some() {
+            self.rename = None;
+        } else if self.editing_keys.is_some() {
+            self.editing_keys = None;
+        }
+    }
+
     /// The keys of the binding whose shortcut editor is open.
     pub fn editing_chord(&self) -> Option<Chord> {
         let label = self.editing_keys.as_ref()?;
@@ -262,16 +393,12 @@ impl App {
     }
 
     /// What the window listens to besides its own widgets: a timer for
-    /// refreshing, and the Escape key.
+    /// refreshing, and the keyboard (for Escape and for recording macros).
     fn subscription(&self) -> Subscription<Message> {
-        let escape = keyboard::listen().filter_map(|event| match event {
-            keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(key::Named::Escape),
-                ..
-            } => Some(Message::EscapePressed),
-            _ => None,
-        });
-        Subscription::batch([iced::time::every(REFRESH).map(|_| Message::Tick), escape])
+        Subscription::batch([
+            iced::time::every(REFRESH).map(|_| Message::Tick),
+            keyboard::listen().map(Message::Keyboard),
+        ])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -296,16 +423,6 @@ impl App {
                 }
             }
             Message::StopCapture => self.stop_capture(),
-            Message::EscapePressed => {
-                // Escape backs out of whatever is open, capture first.
-                if self.capturing {
-                    self.stop_capture();
-                } else if self.rename.is_some() {
-                    self.rename = None;
-                } else if self.editing_keys.is_some() {
-                    self.editing_keys = None;
-                }
-            }
             Message::MoveControl(label, direction) => {
                 if let Page::Device(index) = self.page
                     && let Some(mut device) = self.device(index)
@@ -424,6 +541,142 @@ impl App {
                     });
                 }
             }
+            Message::SetMacro(label, name) => {
+                self.edit_profile(|profile| {
+                    let mode = match profile.bindings.get(&label) {
+                        Some(Binding::Macro { mode, .. }) => *mode,
+                        _ => MacroMode::Once,
+                    };
+                    profile
+                        .bindings
+                        .insert(label, Binding::Macro { name, mode });
+                });
+            }
+            Message::SetMacroMode(label, mode) => {
+                self.edit_profile(|profile| {
+                    if let Some(Binding::Macro { mode: current, .. }) =
+                        profile.bindings.get_mut(&label)
+                    {
+                        *current = mode;
+                    }
+                });
+            }
+
+            Message::CreateMacro => {
+                if let Some(snapshot) = &self.snapshot {
+                    let name = (1..)
+                        .map(|n| format!("Macro {n}"))
+                        .find(|name| {
+                            !snapshot
+                                .macros
+                                .iter()
+                                .any(|m| m.name.eq_ignore_ascii_case(name))
+                        })
+                        .expect("an unused number always exists");
+                    let new = Macro {
+                        name: name.clone(),
+                        steps: Vec::new(),
+                    };
+                    if self.act(|client| client.save_macro("", &new)) {
+                        self.open(Page::Macro(name));
+                    }
+                }
+            }
+            Message::MacroNameChanged(text) => self.macro_name_draft = text,
+            Message::RenameMacro => {
+                let name = self.macro_name_draft.trim().to_string();
+                if !name.is_empty() {
+                    self.edit_macro(|edited| edited.name = name);
+                }
+            }
+            Message::AskDeleteMacro => self.confirm_delete = true,
+            Message::ConfirmDeleteMacro => {
+                if let Some(name) = self.current_macro().map(|m| m.name.clone()) {
+                    self.act(|client| client.delete_macro(&name));
+                    self.confirm_delete = false;
+                }
+            }
+            Message::StartRecording => {
+                self.delay_drafts.clear();
+                self.recording = Some(Recording {
+                    steps: Vec::new(),
+                    last_event: None,
+                });
+            }
+            Message::StopRecording => {
+                if let Some(recording) = self.recording.take() {
+                    self.edit_macro(|edited| edited.steps = recording.steps);
+                }
+            }
+            Message::Keyboard(event) => {
+                if self.recording.is_some() {
+                    self.record(event);
+                } else if let keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(key::Named::Escape),
+                    ..
+                } = event
+                {
+                    self.escape();
+                }
+            }
+            Message::RemoveStep(index) => {
+                self.delay_drafts.clear();
+                self.edit_macro(|edited| {
+                    if index < edited.steps.len() {
+                        edited.steps.remove(index);
+                    }
+                });
+            }
+            Message::MoveStep(index, direction) => {
+                self.delay_drafts.clear();
+                self.edit_macro(|edited| {
+                    let to = match direction {
+                        Direction::Up => index.checked_sub(1),
+                        Direction::Down => Some(index + 1).filter(|to| *to < edited.steps.len()),
+                    };
+                    if let Some(to) = to
+                        && index < edited.steps.len()
+                    {
+                        edited.steps.swap(index, to);
+                    }
+                });
+            }
+            Message::StepDelayChanged(index, text) => {
+                // Keep what is being typed even while it is not yet a
+                // number; save as soon as it is one.
+                let parsed = text.trim().parse::<u32>().ok();
+                self.delay_drafts.insert(index, text);
+                if let Some(ms) = parsed {
+                    self.edit_macro(|edited| {
+                        if let Some(Step::Delay { ms: current }) = edited.steps.get_mut(index) {
+                            *current = ms;
+                        }
+                    });
+                }
+            }
+            Message::AddDelay => {
+                self.edit_macro(|edited| edited.steps.push(Step::Delay { ms: 50 }));
+            }
+            Message::AddKeyTap(choice) => {
+                self.edit_macro(|edited| {
+                    edited.steps.push(Step::KeyDown { key: choice.key });
+                    edited.steps.push(Step::Delay { ms: 30 });
+                    edited.steps.push(Step::KeyUp { key: choice.key });
+                });
+            }
+            Message::DelayAllChanged(text) => self.delay_all_draft = text,
+            Message::SetAllDelays => {
+                if let Ok(ms) = self.delay_all_draft.trim().parse::<u32>() {
+                    self.delay_drafts.clear();
+                    self.edit_macro(|edited| {
+                        for step in &mut edited.steps {
+                            if let Step::Delay { ms: current } = step {
+                                *current = ms;
+                            }
+                        }
+                    });
+                }
+            }
             Message::SetMouseButton(label, choice) => {
                 self.edit_profile(|profile| {
                     profile
@@ -527,7 +780,22 @@ impl App {
                     button: Key::from_name("BTN_MIDDLE").expect("BTN_MIDDLE exists"),
                 },
             }),
-            Kind::Macro => return,
+            Kind::Macro => Some(match previous {
+                Some(binding @ Binding::Macro { .. }) => binding,
+                _ => {
+                    let Some(first) = self
+                        .snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.macros.first())
+                    else {
+                        return;
+                    };
+                    Binding::Macro {
+                        name: first.name.clone(),
+                        mode: MacroMode::Once,
+                    }
+                }
+            }),
         };
         self.editing_keys = (kind == Kind::Keys).then(|| label.clone());
         self.edit_profile(|profile| {

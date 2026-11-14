@@ -141,6 +141,20 @@ impl Api {
             .map_err(fdo::Error::Failed)
     }
 
+    /// Creates or replaces a macro. `original` is its current name, or
+    /// empty for a new one; `text` is the macro file's text.
+    fn save_macro(&self, original: &str, text: &str) -> fdo::Result<()> {
+        lock(&self.shared)
+            .save_macro(original, text)
+            .map_err(fdo::Error::Failed)
+    }
+
+    fn delete_macro(&self, name: &str) -> fdo::Result<()> {
+        lock(&self.shared)
+            .delete_macro(name)
+            .map_err(fdo::Error::Failed)
+    }
+
     /// Replaces one device block; `device` is the block's TOML text.
     fn save_device(&self, index: u32, device: &str) -> fdo::Result<()> {
         lock(&self.shared)

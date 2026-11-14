@@ -7,19 +7,54 @@
 //! The one piece of state that matters is `held`: for every button currently
 //! down, what its press emitted. A release always undoes exactly that, so a
 //! profile switch while a button is held can never leave a key stuck.
+//!
+//! Macros need time, and the engine has no clock of its own: the caller
+//! passes the current time in (any steadily increasing `Duration`), and
+//! asks [`Engine::next_wake`] when to call [`Engine::advance`] next. That
+//! keeps playback exactly testable.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::event::{
     EV_KEY, EV_MSC, EV_REL, Event, Key, REL_HWHEEL, REL_HWHEEL_HI_RES, REL_WHEEL, REL_WHEEL_HI_RES,
     ScrollAxis, Trigger,
 };
-use crate::profile::{Action, ResolvedProfile};
+use crate::macros::Step;
+use crate::profile::{Action, MacroMode, ResolvedProfile};
 
 /// A single scroll event never taps a key more than this many times, however
 /// large its value.
 const MAX_TAPS_PER_SCROLL_EVENT: u32 = 8;
+
+/// A repeating macro never starts a pass sooner than this after the last
+/// one started, so a macro with no delays cannot flood the system.
+const MIN_REPEAT_PERIOD: Duration = Duration::from_millis(10);
+
+/// How far behind schedule a repeating macro may fall before it gives up
+/// catching up and restarts its rhythm from the present.
+const LATE_LIMIT: Duration = Duration::from_millis(100);
+
+/// A macro being played.
+#[derive(Debug)]
+struct Running {
+    /// The button or scroll direction that started it.
+    trigger: Trigger,
+    steps: Arc<[Step]>,
+    mode: MacroMode,
+    /// Index of the next step to perform.
+    position: usize,
+    /// When that step is due.
+    due: Duration,
+    pass_started: Duration,
+    /// Keys this macro has pressed and not yet released.
+    held: Vec<Key>,
+    /// For repeat-while-held: whether the button is still down.
+    button_held: bool,
+    /// Finish the current pass, then stop.
+    stopping: bool,
+}
 
 #[derive(Debug, Default)]
 pub struct Engine {
@@ -32,6 +67,7 @@ pub struct Engine {
     /// Reused buffers, so handling a frame does not allocate.
     frame: Vec<Event>,
     taps: Vec<Event>,
+    running: Vec<Running>,
 }
 
 impl Engine {
@@ -42,8 +78,20 @@ impl Engine {
 
     /// Switches the active profile. Buttons held right now keep what they
     /// emitted and release it normally; only later presses use the new one.
-    pub fn set_profile(&mut self, profile: Arc<ResolvedProfile>) {
+    ///
+    /// Macros in progress are cut short and their keys released: a macro
+    /// meant for one app must not keep typing into the next. Setting the
+    /// profile that is already active changes nothing.
+    pub fn set_profile(&mut self, profile: Arc<ResolvedProfile>, out: &mut Vec<Event>) {
+        if Arc::ptr_eq(&self.profile, &profile) {
+            return;
+        }
         self.profile = profile;
+        for stopped in self.running.drain(..) {
+            for &key in stopped.held.iter().rev() {
+                release_alone(&mut self.down, out, key);
+            }
+        }
     }
 
     pub fn profile(&self) -> &ResolvedProfile {
@@ -51,7 +99,8 @@ impl Engine {
     }
 
     /// Handles one frame from the mouse, appending the output to `out`.
-    pub fn process_frame(&mut self, input: &[Event], out: &mut Vec<Event>) {
+    /// `now` is the current time, used to start and run macros.
+    pub fn process_frame(&mut self, input: &[Event], now: Duration, out: &mut Vec<Event>) {
         self.frame.clear();
         self.taps.clear();
         // The scan code that accompanies a button press names the original
@@ -60,8 +109,8 @@ impl Engine {
 
         for &event in input {
             match event.kind {
-                EV_KEY => changed_a_key |= self.handle_key(Key(event.code), event.value),
-                EV_REL => self.handle_rel(event),
+                EV_KEY => changed_a_key |= self.handle_key(Key(event.code), event.value, now),
+                EV_REL => self.handle_rel(event, now),
                 _ => self.frame.push(event),
             }
         }
@@ -72,12 +121,66 @@ impl Engine {
         end_frame(&mut self.frame);
         out.append(&mut self.frame);
         out.append(&mut self.taps);
+        // A macro started by this frame plays its first steps right away.
+        self.advance(now, out);
+    }
+
+    /// Performs every macro step that is due at `now`.
+    pub fn advance(&mut self, now: Duration, out: &mut Vec<Event>) {
+        let mut index = 0;
+        while index < self.running.len() {
+            if run_macro(&mut self.running[index], &mut self.down, now, out) {
+                self.running.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    /// When [`Engine::advance`] next has something to do, or `None` if no
+    /// macro is playing.
+    pub fn next_wake(&self) -> Option<Duration> {
+        self.running.iter().map(|running| running.due).min()
+    }
+
+    /// Starts a macro for `trigger`, or, if one is already playing for it,
+    /// applies what a new press means in that macro's mode.
+    fn press_macro(
+        &mut self,
+        trigger: Trigger,
+        steps: Arc<[Step]>,
+        mode: MacroMode,
+        button_held: bool,
+        now: Duration,
+    ) {
+        match self.running.iter_mut().find(|r| r.trigger == trigger) {
+            Some(running) => match running.mode {
+                // Already playing; let it finish.
+                MacroMode::Once => {}
+                MacroMode::RepeatWhileHeld => running.button_held = button_held,
+                // A press while on turns it off, and the other way round.
+                MacroMode::Toggle => running.stopping = !running.stopping,
+            },
+            None => self.running.push(Running {
+                trigger,
+                steps,
+                mode,
+                position: 0,
+                due: now,
+                pass_started: now,
+                held: Vec::new(),
+                button_held,
+                stopping: false,
+            }),
+        }
     }
 
     /// Releases every key the engine is holding down. Used when remapping is
     /// paused and when the mouse disappears (it can no longer send releases).
     pub fn release_all(&mut self, out: &mut Vec<Event>) {
         self.held.clear();
+        // Macros stop too; their keys are in `down` and released below.
+        self.running.clear();
         for (key, _) in self.down.drain() {
             out.push(Event::key(key, 0));
             out.push(Event::SYN);
@@ -85,17 +188,22 @@ impl Engine {
     }
 
     /// Returns true if the output differs from the input event.
-    fn handle_key(&mut self, button: Key, value: i32) -> bool {
+    fn handle_key(&mut self, button: Key, value: i32, now: Duration) -> bool {
         match value {
             1 => {
                 if self.held.contains_key(&button) {
                     // A second press with no release in between; ignore it.
                     return true;
                 }
-                let emitted = match self.action_for(Trigger::Key(button)) {
+                let trigger = Trigger::Key(button);
+                let emitted = match self.action_for(trigger).cloned() {
                     None => vec![button],
-                    Some(Action::Keys(keys)) => keys.clone(),
+                    Some(Action::Keys(keys)) => keys,
                     Some(Action::Disabled) => Vec::new(),
+                    Some(Action::Macro { steps, mode }) => {
+                        self.press_macro(trigger, steps, mode, true, now);
+                        Vec::new()
+                    }
                 };
                 for &key in &emitted {
                     press(&mut self.down, &mut self.frame, key);
@@ -106,6 +214,11 @@ impl Engine {
             }
             0 => match self.held.remove(&button) {
                 Some(emitted) => {
+                    // A repeat-while-held macro finishes its pass and stops.
+                    let trigger = Trigger::Key(button);
+                    if let Some(running) = self.running.iter_mut().find(|r| r.trigger == trigger) {
+                        running.button_held = false;
+                    }
                     for &key in emitted.iter().rev() {
                         release(&mut self.down, &mut self.frame, key);
                     }
@@ -132,7 +245,7 @@ impl Engine {
         }
     }
 
-    fn handle_rel(&mut self, event: Event) {
+    fn handle_rel(&mut self, event: Event, now: Duration) {
         let (axis, hi_res) = match event.code {
             REL_WHEEL => (ScrollAxis::Vertical, false),
             REL_WHEEL_HI_RES => (ScrollAxis::Vertical, true),
@@ -145,16 +258,25 @@ impl Engine {
             axis,
             positive: event.value > 0,
         };
-        let keys = match self.action_for(trigger) {
+        let action = match self.action_for(trigger).cloned() {
             None => return self.frame.push(event),
             Some(Action::Disabled) => return,
-            Some(Action::Keys(keys)) => keys.clone(),
+            Some(action) => action,
         };
         // The kernel reports each scroll twice: whole ticks and a
-        // high-resolution stream. Both are swallowed; only whole ticks tap.
+        // high-resolution stream. Both are swallowed; only whole ticks act.
         if hi_res {
             return;
         }
+        let keys = match action {
+            Action::Keys(keys) => keys,
+            Action::Macro { steps, mode } => {
+                // A scroll tick has no "held", so repeat-while-held plays
+                // one pass per tick.
+                return self.press_macro(trigger, steps, mode, false, now);
+            }
+            Action::Disabled => return,
+        };
         let ticks = event.value.unsigned_abs().min(MAX_TAPS_PER_SCROLL_EVENT);
         for _ in 0..ticks {
             for &key in &keys {
@@ -200,6 +322,81 @@ fn release(down: &mut HashMap<Key, u32>, buffer: &mut Vec<Event>, key: Key) {
         separate_from_previous_key(buffer);
         buffer.push(Event::key(key, 0));
     }
+}
+
+/// Presses `key` in a frame of its own (if it is not already down).
+fn press_alone(down: &mut HashMap<Key, u32>, out: &mut Vec<Event>, key: Key) {
+    let before = out.len();
+    press(down, out, key);
+    if out.len() > before {
+        end_frame(out);
+    }
+}
+
+/// Releases `key` in a frame of its own (if nothing else holds it).
+fn release_alone(down: &mut HashMap<Key, u32>, out: &mut Vec<Event>, key: Key) {
+    let before = out.len();
+    release(down, out, key);
+    if out.len() > before {
+        end_frame(out);
+    }
+}
+
+/// Performs the steps of one macro that are due. Returns true when the
+/// macro has finished and should be dropped.
+fn run_macro(
+    running: &mut Running,
+    down: &mut HashMap<Key, u32>,
+    now: Duration,
+    out: &mut Vec<Event>,
+) -> bool {
+    while running.due <= now {
+        let Some(step) = running.steps.get(running.position) else {
+            // End of a pass. A macro that forgot to release a key must not
+            // leave it stuck.
+            for key in std::mem::take(&mut running.held).into_iter().rev() {
+                release_alone(down, out, key);
+            }
+            let again = !running.stopping
+                && !running.steps.is_empty()
+                && match running.mode {
+                    MacroMode::Once => false,
+                    MacroMode::RepeatWhileHeld => running.button_held,
+                    MacroMode::Toggle => true,
+                };
+            if !again {
+                return true;
+            }
+            running.position = 0;
+            running.due = running.due.max(running.pass_started + MIN_REPEAT_PERIOD);
+            // If we are far behind (the process was stalled), start the
+            // next pass now rather than replaying the missed passes in a
+            // burst. Small lateness is left alone so the rhythm stays exact.
+            if now.saturating_sub(running.due) > LATE_LIMIT {
+                running.due = now;
+            }
+            running.pass_started = running.due;
+            continue;
+        };
+        match *step {
+            Step::KeyDown { key } => {
+                if !running.held.contains(&key) {
+                    running.held.push(key);
+                    press_alone(down, out, key);
+                }
+            }
+            Step::KeyUp { key } => {
+                // Only release what this macro itself pressed.
+                if let Some(index) = running.held.iter().position(|held| *held == key) {
+                    running.held.remove(index);
+                    release_alone(down, out, key);
+                }
+            }
+            Step::Delay { ms } => running.due += Duration::from_millis(u64::from(ms)),
+        }
+        running.position += 1;
+    }
+    false
 }
 
 /// If the frame being built already ends in a key event, close it so the next
@@ -253,9 +450,47 @@ mod tests {
     }
 
     fn run(engine: &mut Engine, input: &[Event]) -> Vec<Event> {
+        run_at(engine, 0, input)
+    }
+
+    /// Feeds a frame in at a given time in milliseconds.
+    fn run_at(engine: &mut Engine, ms: u64, input: &[Event]) -> Vec<Event> {
         let mut out = Vec::new();
-        engine.process_frame(input, &mut out);
+        engine.process_frame(input, Duration::from_millis(ms), &mut out);
         out
+    }
+
+    /// Lets time pass up to `ms` milliseconds and returns what was played.
+    fn advance_to(engine: &mut Engine, ms: u64) -> Vec<Event> {
+        let mut out = Vec::new();
+        engine.advance(Duration::from_millis(ms), &mut out);
+        out
+    }
+
+    fn switch(engine: &mut Engine, profile: Arc<ResolvedProfile>) {
+        let mut out = Vec::new();
+        engine.set_profile(profile, &mut out);
+        assert_eq!(out, [], "no macro was running, so nothing is released");
+    }
+
+    /// A macro action: press and release `key` with `hold` ms in between,
+    /// then wait `gap` ms.
+    fn tap_macro(key_name: &str, hold: u32, gap: u32, mode: MacroMode) -> Action {
+        let key = key(key_name);
+        Action::Macro {
+            steps: vec![
+                Step::KeyDown { key },
+                Step::Delay { ms: hold },
+                Step::KeyUp { key },
+                Step::Delay { ms: gap },
+            ]
+            .into(),
+            mode,
+        }
+    }
+
+    fn wake_ms(engine: &Engine) -> Option<u128> {
+        engine.next_wake().map(|at| at.as_millis())
     }
 
     #[test]
@@ -277,7 +512,7 @@ mod tests {
     #[test]
     fn a_button_becomes_a_key_and_motion_in_the_frame_survives() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[("BTN_SIDE", keys(&["KEY_F13"]))]));
+        switch(&mut engine, profile(&[("BTN_SIDE", keys(&["KEY_F13"]))]));
         let scan = Event {
             kind: EV_MSC,
             code: 4,
@@ -297,7 +532,10 @@ mod tests {
     #[test]
     fn a_chord_presses_in_order_and_releases_in_reverse() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[("BTN_SIDE", keys(&["KEY_LEFTALT", "KEY_TAB"]))]));
+        switch(
+            &mut engine,
+            profile(&[("BTN_SIDE", keys(&["KEY_LEFTALT", "KEY_TAB"]))]),
+        );
         assert_eq!(
             run(&mut engine, &[down("BTN_SIDE")]),
             [down("KEY_LEFTALT"), SYN, down("KEY_TAB"), SYN]
@@ -311,7 +549,7 @@ mod tests {
     #[test]
     fn a_disabled_button_emits_nothing() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[("BTN_SIDE", Action::Disabled)]));
+        switch(&mut engine, profile(&[("BTN_SIDE", Action::Disabled)]));
         assert_eq!(run(&mut engine, &[down("BTN_SIDE")]), []);
         assert_eq!(run(&mut engine, &[up("BTN_SIDE")]), []);
     }
@@ -324,12 +562,12 @@ mod tests {
 
         // Remapped press, then switch.
         let mut engine = Engine::new();
-        engine.set_profile(browser.clone());
+        switch(&mut engine, browser.clone());
         assert_eq!(
             run(&mut engine, &[down("BTN_SIDE")]),
             [down("KEY_F13"), SYN]
         );
-        engine.set_profile(game.clone());
+        switch(&mut engine, game.clone());
         assert_eq!(run(&mut engine, &[up("BTN_SIDE")]), [up("KEY_F13"), SYN]);
         // The next press uses the new profile.
         assert_eq!(
@@ -344,21 +582,21 @@ mod tests {
             run(&mut engine, &[down("BTN_SIDE")]),
             [down("BTN_SIDE"), SYN]
         );
-        engine.set_profile(game);
+        switch(&mut engine, game);
         assert_eq!(run(&mut engine, &[up("BTN_SIDE")]), [up("BTN_SIDE"), SYN]);
 
         // Remapped press, then switch to a profile that disables it.
         let mut engine = Engine::new();
-        engine.set_profile(browser);
+        switch(&mut engine, browser);
         run(&mut engine, &[down("BTN_SIDE")]);
-        engine.set_profile(profile(&[("BTN_SIDE", Action::Disabled)]));
+        switch(&mut engine, profile(&[("BTN_SIDE", Action::Disabled)]));
         assert_eq!(run(&mut engine, &[up("BTN_SIDE")]), [up("KEY_F13"), SYN]);
     }
 
     #[test]
     fn left_click_passes_through_even_if_a_profile_claims_it() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[("BTN_LEFT", Action::Disabled)]));
+        switch(&mut engine, profile(&[("BTN_LEFT", Action::Disabled)]));
         assert_eq!(
             run(&mut engine, &[down("BTN_LEFT")]),
             [down("BTN_LEFT"), SYN]
@@ -369,10 +607,13 @@ mod tests {
     #[test]
     fn two_buttons_on_one_key_release_it_only_when_both_are_up() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[
-            ("BTN_SIDE", keys(&["KEY_LEFTCTRL"])),
-            ("BTN_EXTRA", keys(&["KEY_LEFTCTRL"])),
-        ]));
+        switch(
+            &mut engine,
+            profile(&[
+                ("BTN_SIDE", keys(&["KEY_LEFTCTRL"])),
+                ("BTN_EXTRA", keys(&["KEY_LEFTCTRL"])),
+            ]),
+        );
         assert_eq!(
             run(&mut engine, &[down("BTN_SIDE")]),
             [down("KEY_LEFTCTRL"), SYN]
@@ -388,7 +629,7 @@ mod tests {
     #[test]
     fn a_remapped_scroll_direction_taps_and_swallows_both_wheel_events() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[("REL_WHEEL:+", keys(&["KEY_F15"]))]));
+        switch(&mut engine, profile(&[("REL_WHEEL:+", keys(&["KEY_F15"]))]));
 
         // One tick up, as the kernel sends it: low-res and hi-res together.
         let tick_up = [Event::rel(REL_WHEEL, 1), Event::rel(REL_WHEEL_HI_RES, 120)];
@@ -413,7 +654,7 @@ mod tests {
     #[test]
     fn scroll_taps_come_after_the_rest_of_the_frame() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[("REL_WHEEL:-", keys(&["KEY_F16"]))]));
+        switch(&mut engine, profile(&[("REL_WHEEL:-", keys(&["KEY_F16"]))]));
         assert_eq!(
             run(
                 &mut engine,
@@ -437,7 +678,7 @@ mod tests {
     #[test]
     fn a_disabled_scroll_direction_is_swallowed() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[("REL_WHEEL:+", Action::Disabled)]));
+        switch(&mut engine, profile(&[("REL_WHEEL:+", Action::Disabled)]));
         let tick = [Event::rel(REL_WHEEL, 1), Event::rel(REL_WHEEL_HI_RES, 120)];
         assert_eq!(run(&mut engine, &tick), []);
     }
@@ -445,7 +686,7 @@ mod tests {
     #[test]
     fn release_all_lets_go_of_everything_once() {
         let mut engine = Engine::new();
-        engine.set_profile(profile(&[("BTN_SIDE", keys(&["KEY_F13"]))]));
+        switch(&mut engine, profile(&[("BTN_SIDE", keys(&["KEY_F13"]))]));
         run(&mut engine, &[down("BTN_SIDE")]);
 
         let mut out = Vec::new();
@@ -463,7 +704,166 @@ mod tests {
     fn output_is_appended_not_overwritten() {
         let mut engine = Engine::new();
         let mut out = vec![Event::rel(REL_X, 1), SYN];
-        engine.process_frame(&[Event::rel(REL_X, 2)], &mut out);
+        engine.process_frame(&[Event::rel(REL_X, 2)], Duration::ZERO, &mut out);
         assert_eq!(out, [Event::rel(REL_X, 1), SYN, Event::rel(REL_X, 2), SYN]);
+    }
+
+    #[test]
+    fn a_once_macro_plays_through_with_its_timing_even_after_release() {
+        let mut engine = Engine::new();
+        switch(
+            &mut engine,
+            profile(&[("BTN_SIDE", tap_macro("KEY_B", 40, 0, MacroMode::Once))]),
+        );
+        // The first step plays in the same instant as the press.
+        assert_eq!(
+            run_at(&mut engine, 1000, &[down("BTN_SIDE")]),
+            [down("KEY_B"), SYN]
+        );
+        assert_eq!(wake_ms(&engine), Some(1040));
+        // Releasing the button early changes nothing.
+        assert_eq!(run_at(&mut engine, 1010, &[up("BTN_SIDE")]), []);
+        assert_eq!(advance_to(&mut engine, 1039), []);
+        assert_eq!(advance_to(&mut engine, 1040), [up("KEY_B"), SYN]);
+        assert_eq!(wake_ms(&engine), None, "finished");
+
+        // Pressing again while it plays does not start a second copy.
+        run_at(&mut engine, 2000, &[down("BTN_SIDE")]);
+        run_at(&mut engine, 2005, &[up("BTN_SIDE")]);
+        assert_eq!(run_at(&mut engine, 2010, &[down("BTN_SIDE")]), []);
+        assert_eq!(advance_to(&mut engine, 2040), [up("KEY_B"), SYN]);
+        assert_eq!(wake_ms(&engine), None);
+    }
+
+    #[test]
+    fn a_repeat_macro_loops_while_held_and_finishes_its_pass_on_release() {
+        let mut engine = Engine::new();
+        switch(
+            &mut engine,
+            profile(&[(
+                "BTN_SIDE",
+                tap_macro("KEY_B", 20, 30, MacroMode::RepeatWhileHeld),
+            )]),
+        );
+        assert_eq!(
+            run_at(&mut engine, 0, &[down("BTN_SIDE")]),
+            [down("KEY_B"), SYN]
+        );
+        assert_eq!(advance_to(&mut engine, 20), [up("KEY_B"), SYN]);
+        // One pass is 50 ms; the second starts exactly then.
+        assert_eq!(advance_to(&mut engine, 49), []);
+        assert_eq!(advance_to(&mut engine, 50), [down("KEY_B"), SYN]);
+        // Released mid-pass: the key still comes up on schedule, then stop.
+        assert_eq!(run_at(&mut engine, 60, &[up("BTN_SIDE")]), []);
+        assert_eq!(advance_to(&mut engine, 70), [up("KEY_B"), SYN]);
+        assert_eq!(advance_to(&mut engine, 500), []);
+        assert_eq!(wake_ms(&engine), None);
+    }
+
+    #[test]
+    fn a_toggle_macro_runs_until_the_next_press() {
+        let mut engine = Engine::new();
+        switch(
+            &mut engine,
+            profile(&[("BTN_SIDE", tap_macro("KEY_B", 10, 10, MacroMode::Toggle))]),
+        );
+        assert_eq!(
+            run_at(&mut engine, 0, &[down("BTN_SIDE")]),
+            [down("KEY_B"), SYN]
+        );
+        assert_eq!(run_at(&mut engine, 5, &[up("BTN_SIDE")]), []);
+        // Keeps going with the button up: three more edges by 30 ms.
+        assert_eq!(
+            advance_to(&mut engine, 30),
+            [up("KEY_B"), SYN, down("KEY_B"), SYN, up("KEY_B"), SYN]
+        );
+        // The second press turns it off after the pass in progress.
+        assert_eq!(run_at(&mut engine, 35, &[down("BTN_SIDE")]), []);
+        assert_eq!(advance_to(&mut engine, 1000), []);
+        assert_eq!(wake_ms(&engine), None);
+    }
+
+    #[test]
+    fn a_repeating_macro_with_no_delays_is_rate_limited() {
+        let b = key("KEY_B");
+        let mut engine = Engine::new();
+        switch(
+            &mut engine,
+            profile(&[(
+                "BTN_SIDE",
+                Action::Macro {
+                    steps: vec![Step::KeyDown { key: b }, Step::KeyUp { key: b }].into(),
+                    mode: MacroMode::Toggle,
+                },
+            )]),
+        );
+        let first = run_at(&mut engine, 0, &[down("BTN_SIDE")]);
+        assert_eq!(first, [down("KEY_B"), SYN, up("KEY_B"), SYN]);
+        assert_eq!(wake_ms(&engine), Some(10));
+        // A long stall does not produce a burst of missed passes.
+        let after_stall = advance_to(&mut engine, 5000);
+        assert!(after_stall.len() <= 8, "{} events", after_stall.len());
+    }
+
+    #[test]
+    fn a_macro_that_forgets_a_release_does_not_leave_the_key_stuck() {
+        let mut engine = Engine::new();
+        switch(
+            &mut engine,
+            profile(&[(
+                "BTN_SIDE",
+                Action::Macro {
+                    steps: vec![Step::KeyDown { key: key("KEY_B") }, Step::Delay { ms: 5 }].into(),
+                    mode: MacroMode::Once,
+                },
+            )]),
+        );
+        assert_eq!(
+            run_at(&mut engine, 0, &[down("BTN_SIDE")]),
+            [down("KEY_B"), SYN]
+        );
+        assert_eq!(advance_to(&mut engine, 5), [up("KEY_B"), SYN]);
+    }
+
+    #[test]
+    fn a_profile_switch_or_release_all_cuts_macros_short() {
+        let toggling = profile(&[("BTN_SIDE", tap_macro("KEY_B", 50, 50, MacroMode::Toggle))]);
+
+        let mut engine = Engine::new();
+        switch(&mut engine, toggling.clone());
+        run_at(&mut engine, 0, &[down("BTN_SIDE")]);
+        let mut out = Vec::new();
+        engine.set_profile(profile(&[]), &mut out);
+        assert_eq!(out, [up("KEY_B"), SYN], "the held macro key is released");
+        assert_eq!(advance_to(&mut engine, 1000), []);
+        assert_eq!(wake_ms(&engine), None);
+
+        let mut engine = Engine::new();
+        switch(&mut engine, toggling.clone());
+        run_at(&mut engine, 0, &[down("BTN_SIDE")]);
+        // Re-applying the very same profile (as every focus change does)
+        // must not interrupt it.
+        switch(&mut engine, toggling);
+        assert_eq!(wake_ms(&engine), Some(50));
+        let mut out = Vec::new();
+        engine.release_all(&mut out);
+        assert_eq!(out, [up("KEY_B"), SYN]);
+        assert_eq!(wake_ms(&engine), None);
+    }
+
+    #[test]
+    fn a_scroll_tick_can_start_a_macro() {
+        let mut engine = Engine::new();
+        switch(
+            &mut engine,
+            profile(&[(
+                "REL_WHEEL:+",
+                tap_macro("KEY_B", 5, 0, MacroMode::RepeatWhileHeld),
+            )]),
+        );
+        let tick = [Event::rel(REL_WHEEL, 1), Event::rel(REL_WHEEL_HI_RES, 120)];
+        assert_eq!(run_at(&mut engine, 0, &tick), [down("KEY_B"), SYN]);
+        assert_eq!(advance_to(&mut engine, 5), [up("KEY_B"), SYN]);
+        assert_eq!(wake_ms(&engine), None, "one pass per tick");
     }
 }

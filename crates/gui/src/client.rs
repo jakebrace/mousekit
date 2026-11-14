@@ -2,7 +2,7 @@
 //! interface. The GUI never opens devices or config files itself.
 
 use mouse_profiles_core::dbus::{BUS_NAME, INSTANCE_VARIABLE, INTERFACE, OBJECT_PATH};
-use mouse_profiles_core::{DeviceConfig, Profile, Snapshot};
+use mouse_profiles_core::{DeviceConfig, Macro, Profile, Snapshot};
 use zbus::blocking::Connection;
 use zbus::zvariant::{DynamicDeserialize, DynamicType};
 
@@ -71,6 +71,15 @@ impl Client {
 
     pub fn delete_profile(&self, name: &str) -> Result<(), String> {
         self.call("DeleteProfile", &(name,))
+    }
+
+    /// `original` is the macro's current name, or empty to create it.
+    pub fn save_macro(&self, original: &str, new: &Macro) -> Result<(), String> {
+        self.call("SaveMacro", &(original, new.to_toml()))
+    }
+
+    pub fn delete_macro(&self, name: &str) -> Result<(), String> {
+        self.call("DeleteMacro", &(name,))
     }
 
     pub fn save_device(&self, index: usize, device: &DeviceConfig) -> Result<(), String> {

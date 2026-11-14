@@ -358,6 +358,81 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
     fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
     expect_key(&mut output, KeyCode::KEY_F14, 0);
 
+    // Macros: saved over D-Bus, bound to the button, played with real timing.
+    let tap = "name = \"tap\"\n[[step]]\ntype = \"key_down\"\nkey = \"KEY_B\"\n[[step]]\ntype = \"delay\"\nms = 60\n[[step]]\ntype = \"key_up\"\nkey = \"KEY_B\"\n[[step]]\ntype = \"delay\"\nms = 40\n";
+    busctl("SaveMacro", "ss", &["", tap]);
+    assert!(config_dir.join("macros/tap.toml").exists());
+    let with_macro = |mode: &str| {
+        format!(
+            "name = \"Default\"\n[bindings]\nM4 = {{ type = \"macro\", name = \"tap\", mode = \"{mode}\" }}\n"
+        )
+    };
+    busctl("SaveProfile", "ss", &["Default", &with_macro("once")]);
+
+    // Once: a quick click plays the whole macro, with the 60 ms hold.
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_B, 1);
+    let pressed = Instant::now();
+    expect_key(&mut output, KeyCode::KEY_B, 0);
+    let held = pressed.elapsed();
+    assert!(
+        held >= Duration::from_millis(45) && held < Duration::from_millis(150),
+        "the key was held for {held:?}, expected about 60 ms"
+    );
+
+    // Repeat while held: passes keep coming, 100 ms apart, until release.
+    busctl(
+        "SaveProfile",
+        "ss",
+        &["Default", &with_macro("repeat_while_held")],
+    );
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_B, 1);
+    let first_pass = Instant::now();
+    expect_key(&mut output, KeyCode::KEY_B, 0);
+    expect_key(&mut output, KeyCode::KEY_B, 1);
+    let period = first_pass.elapsed();
+    assert!(
+        period >= Duration::from_millis(85) && period < Duration::from_millis(200),
+        "passes were {period:?} apart, expected about 100 ms"
+    );
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_B, 0);
+
+    // Toggle: one click starts it, it keeps going, the next click stops it.
+    busctl("SaveProfile", "ss", &["Default", &with_macro("toggle")]);
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    for _ in 0..2 {
+        expect_key(&mut output, KeyCode::KEY_B, 1);
+        expect_key(&mut output, KeyCode::KEY_B, 0);
+    }
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    // Let the pass in progress finish, then check it really stopped.
+    sleep(Duration::from_millis(300));
+    while output.fetch_events().is_ok_and(|events| events.count() > 0) {}
+    sleep(Duration::from_millis(250));
+    assert!(
+        output
+            .fetch_events()
+            .map_or(true, |events| events.count() == 0),
+        "the toggled-off macro kept playing"
+    );
+
+    // A macro in use cannot be deleted; once unused it can.
+    assert!(busctl("DeleteMacro", "s", &["tap"]).contains("still used by: Default"));
+    let plain_default =
+        "name = \"Default\"\n[bindings]\nM4 = { type = \"key\", keys = [\"KEY_F14\"] }\n";
+    busctl("SaveProfile", "ss", &["Default", plain_default]);
+    busctl("DeleteMacro", "s", &["tap"]);
+    assert!(!config_dir.join("macros/tap.toml").exists());
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 1);
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 0);
+
     let new_profile = "name = \"Made By Gui\"\n[match]\nwindow_class = [\"gui-app\"]\n[bindings]\nM4 = { type = \"disabled\" }\n";
     busctl("SaveProfile", "ss", &["", new_profile]);
     let new_path = config_dir.join("profiles/made-by-gui.toml");

@@ -6,7 +6,8 @@
 //! - [`event`]: the event, key and trigger types everything else speaks in.
 //! - [`config`]: `config.toml` (settings and known mice).
 //! - [`profile`]: profile files, and resolving them against a mouse.
-//! - [`engine`]: the state machine that rewrites events.
+//! - [`macros`]: macro files.
+//! - [`engine`]: the state machine that rewrites events and plays macros.
 //! - [`focus`]: which profile a focused window calls for.
 
 pub mod config;
@@ -27,6 +28,7 @@ pub mod error;
 pub mod event;
 pub mod focus;
 mod keynames;
+pub mod macros;
 pub mod profile;
 pub mod snapshot;
 
@@ -35,5 +37,6 @@ pub use engine::Engine;
 pub use error::ConfigError;
 pub use event::{Event, Key, ScrollAxis, Trigger};
 pub use focus::{Decision, Window, WindowKind, check_profiles, decide};
-pub use profile::{Action, Binding, Profile, ResolvedProfile, resolve};
+pub use macros::{Macro, Step, check_macros};
+pub use profile::{Action, Binding, MacroMode, Profile, ResolvedProfile, resolve};
 pub use snapshot::{DeviceSnapshot, Snapshot, WindowSummary};

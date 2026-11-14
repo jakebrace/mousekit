@@ -8,7 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mouse_profiles_core::{
-    Config, DeviceConfig, DeviceSnapshot, Profile, Snapshot, WindowSummary, check_profiles, resolve,
+    Binding, Config, DeviceConfig, DeviceSnapshot, Macro, Profile, Snapshot, WindowSummary,
+    check_macros, check_profiles, resolve,
 };
 
 use crate::State;
@@ -32,6 +33,7 @@ impl State {
             focus_status: self.focus_status.clone(),
             default_profile: self.loaded.default.clone(),
             profiles: self.loaded.profiles.clone(),
+            macros: self.loaded.macros.clone(),
             devices: self
                 .loaded
                 .config
@@ -80,7 +82,12 @@ impl State {
         } else {
             profiles.push(profile.clone());
         }
-        check_all(&self.loaded.config, &default, &profiles)?;
+        check_all(
+            &self.loaded.config,
+            &default,
+            &profiles,
+            &self.loaded.macros,
+        )?;
 
         let profiles_dir = self.loaded.dir.join("profiles");
         let path = if is_default {
@@ -88,7 +95,7 @@ impl State {
         } else if let Some(index) = existing {
             self.loaded.profile_paths[index].clone()
         } else {
-            new_profile_path(&profiles_dir, &profile.name)
+            new_file_path(&profiles_dir, &profile.name, "profile")
         };
         write_file(&path, &profile.to_toml())?;
         self.reload().map(|_| ())
@@ -125,7 +132,12 @@ impl State {
         }
         *slot = device;
         config.validate().map_err(|error| error.to_string())?;
-        check_all(&config, &self.loaded.default, &self.loaded.profiles)?;
+        check_all(
+            &config,
+            &self.loaded.default,
+            &self.loaded.profiles,
+            &self.loaded.macros,
+        )?;
 
         write_file(&self.loaded.dir.join("config.toml"), &config.to_toml())?;
         self.reload().map(|_| ())
@@ -172,35 +184,124 @@ impl State {
         }
         self.reload().map(|_| ())
     }
+
+    /// Creates or replaces a macro. `original` is its current name, or empty
+    /// to create one. Renaming it updates every profile that uses it.
+    pub fn save_macro(&mut self, original: &str, toml: &str) -> Result<(), String> {
+        let new = Macro::from_toml(toml).map_err(|error| error.to_string())?;
+        let existing = self
+            .loaded
+            .macros
+            .iter()
+            .position(|candidate| candidate.name == original);
+        if !original.is_empty() && existing.is_none() {
+            return Err(format!("there is no macro named \"{original}\""));
+        }
+        let mut macros = self.loaded.macros.clone();
+        match existing {
+            Some(index) => macros[index] = new.clone(),
+            None => macros.push(new.clone()),
+        }
+        check_macros(&macros).map_err(|error| error.to_string())?;
+
+        let macros_dir = self.loaded.dir.join("macros");
+        let path = match existing {
+            Some(index) => self.loaded.macro_paths[index].clone(),
+            None => new_file_path(&macros_dir, &new.name, "macro"),
+        };
+        write_file(&path, &new.to_toml())?;
+
+        if existing.is_some() && new.name != original {
+            let rename_in = |profile: &Profile| -> Option<Profile> {
+                let mut profile = profile.clone();
+                let mut changed = false;
+                for binding in profile.bindings.values_mut() {
+                    if let Binding::Macro { name, .. } = binding
+                        && name == original
+                    {
+                        *name = new.name.clone();
+                        changed = true;
+                    }
+                }
+                changed.then_some(profile)
+            };
+            let profiles_dir = self.loaded.dir.join("profiles");
+            if let Some(default) = rename_in(&self.loaded.default) {
+                write_file(&profiles_dir.join("default.toml"), &default.to_toml())?;
+            }
+            for (profile, path) in self.loaded.profiles.iter().zip(&self.loaded.profile_paths) {
+                if let Some(profile) = rename_in(profile) {
+                    write_file(path, &profile.to_toml())?;
+                }
+            }
+        }
+        self.reload().map(|_| ())
+    }
+
+    /// Deletes a macro, unless a profile still uses it.
+    pub fn delete_macro(&mut self, name: &str) -> Result<(), String> {
+        let index = self
+            .loaded
+            .macros
+            .iter()
+            .position(|candidate| candidate.name == name)
+            .ok_or_else(|| format!("there is no macro named \"{name}\""))?;
+        let users: Vec<&str> = std::iter::once(&self.loaded.default)
+            .chain(&self.loaded.profiles)
+            .filter(|profile| {
+                profile.bindings.values().any(
+                    |binding| matches!(binding, Binding::Macro { name: used, .. } if used == name),
+                )
+            })
+            .map(|profile| profile.name.as_str())
+            .collect();
+        if !users.is_empty() {
+            return Err(format!(
+                "macro \"{name}\" is still used by: {}. Change those buttons first.",
+                users.join(", ")
+            ));
+        }
+        let path = &self.loaded.macro_paths[index];
+        fs::remove_file(path)
+            .map_err(|error| format!("cannot delete {}: {error}", path.display()))?;
+        self.reload().map(|_| ())
+    }
 }
 
 /// The checks `load` would make, run before anything is written.
-fn check_all(config: &Config, default: &Profile, profiles: &[Profile]) -> Result<(), String> {
+fn check_all(
+    config: &Config,
+    default: &Profile,
+    profiles: &[Profile],
+    macros: &[Macro],
+) -> Result<(), String> {
     check_profiles(default, profiles).map_err(|error| error.to_string())?;
     for device in &config.devices {
         for overlay in std::iter::once(None).chain(profiles.iter().map(Some)) {
-            resolve(device, default, overlay).map_err(|error| error.to_string())?;
+            resolve(device, default, overlay, macros).map_err(|error| error.to_string())?;
         }
     }
     Ok(())
 }
 
-/// A file name for a new profile: its name in lowercase with anything that
-/// is not a letter or digit turned into a dash, made unique with a number.
-fn new_profile_path(profiles_dir: &Path, name: &str) -> PathBuf {
+/// A file name for a new profile or macro: its name in lowercase with
+/// anything that is not a letter or digit turned into a dash, made unique
+/// with a number. `fallback` is used when nothing usable is left.
+fn new_file_path(dir: &Path, name: &str, fallback: &str) -> PathBuf {
     let mut slug: String = name
         .to_lowercase()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     slug = slug.trim_matches('-').to_string();
+    // "default" is reserved for the default profile's file.
     if slug.is_empty() || slug == "default" {
-        slug = "profile".into();
+        slug = fallback.into();
     }
-    let mut path = profiles_dir.join(format!("{slug}.toml"));
+    let mut path = dir.join(format!("{slug}.toml"));
     let mut number = 2;
     while path.exists() {
-        path = profiles_dir.join(format!("{slug}-{number}.toml"));
+        path = dir.join(format!("{slug}-{number}.toml"));
         number += 1;
     }
     path

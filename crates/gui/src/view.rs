@@ -8,7 +8,9 @@ use iced::widget::{
     text_input,
 };
 use iced::{Alignment, Element, Length};
-use mouse_profiles_core::{Binding, DeviceSnapshot, Key, Profile, Snapshot, Trigger};
+use mouse_profiles_core::{
+    Binding, DeviceSnapshot, Key, Macro, MacroMode, Profile, Snapshot, Step, Trigger,
+};
 
 use crate::keys::{self, KeyChoice};
 use crate::{App, Direction, Kind, Message, Page, kind_of};
@@ -60,6 +62,10 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
         Page::Profile(_) => match app.current_profile() {
             Some(profile) => profile_page(app, snapshot, profile),
             None => text("This profile no longer exists.").into(),
+        },
+        Page::Macro(_) => match app.current_macro() {
+            Some(current) => macro_page(app, snapshot, current),
+            None => text("This macro no longer exists.").into(),
         },
     });
 
@@ -120,6 +126,21 @@ fn sidebar<'a>(app: &'a App, snapshot: &'a Snapshot) -> Element<'a, Message> {
             &app.page,
         ));
     }
+
+    list = list.push(space().height(12)).push(hint("MACROS"));
+    for one in &snapshot.macros {
+        list = list.push(nav_button(
+            one.name.clone(),
+            Page::Macro(one.name.clone()),
+            &app.page,
+        ));
+    }
+    list = list.push(
+        button("Add macro")
+            .width(Length::Fill)
+            .style(button::secondary)
+            .on_press(Message::CreateMacro),
+    );
 
     let new_profile = column![
         text_input("New profile name", &app.new_profile_name)
@@ -528,8 +549,15 @@ fn binding_row<'a>(
         kind: Kind::Disabled,
         label: "Disabled".into(),
     });
-    if kind == Kind::Macro || (kind == Kind::Passthrough && options.iter().all(|o| o.kind != kind))
-    {
+    if !snapshot.macros.is_empty() {
+        options.push(KindOption {
+            kind: Kind::Macro,
+            label: "Macro".into(),
+        });
+    }
+    // A binding the list above does not offer (a macro that was deleted by
+    // hand, or a stray passthrough) is still shown as what it is.
+    if options.iter().all(|option| option.kind != kind) {
         options.push(KindOption {
             kind,
             label: binding.map(summary).unwrap_or_default(),
@@ -568,7 +596,25 @@ fn binding_row<'a>(
             .placeholder(keys::friendly(*button))
             .into()
         }
-        Some(Binding::Macro { .. }) => hint("Macros can be edited in a later version."),
+        Some(Binding::Macro { name, mode }) => {
+            let names: Vec<String> = snapshot.macros.iter().map(|m| m.name.clone()).collect();
+            let selected = names.iter().find(|candidate| *candidate == name).cloned();
+            let modes = mode_options();
+            let selected_mode = modes.iter().find(|option| option.mode == *mode).cloned();
+            let label_for_macro = label.to_string();
+            let label_for_mode = label.to_string();
+            row![
+                pick_list(names, selected, move |name: String| {
+                    Message::SetMacro(label_for_macro.clone(), name)
+                })
+                .placeholder(format!("{name} (missing)")),
+                pick_list(modes, selected_mode, move |option: ModeOption| {
+                    Message::SetMacroMode(label_for_mode.clone(), option.mode)
+                }),
+            ]
+            .spacing(8)
+            .into()
+        }
         _ => space().into(),
     };
 
@@ -631,6 +677,220 @@ fn chord_editor<'a>(app: &'a App, chord: &keys::Chord) -> Element<'a, Message> {
     .padding(12)
     .style(container::bordered_box)
     .into()
+}
+
+/// One entry in the "how does the macro play" dropdown.
+#[derive(Debug, Clone, PartialEq)]
+struct ModeOption {
+    mode: MacroMode,
+    label: &'static str,
+}
+
+impl fmt::Display for ModeOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label)
+    }
+}
+
+fn mode_options() -> Vec<ModeOption> {
+    vec![
+        ModeOption {
+            mode: MacroMode::Once,
+            label: "Once per press",
+        },
+        ModeOption {
+            mode: MacroMode::RepeatWhileHeld,
+            label: "Repeat while held",
+        },
+        ModeOption {
+            mode: MacroMode::Toggle,
+            label: "Toggle on / off",
+        },
+    ]
+}
+
+// ----------------------------------------------------------------- macro page
+
+fn macro_page<'a>(
+    app: &'a App,
+    snapshot: &'a Snapshot,
+    current: &'a Macro,
+) -> Element<'a, Message> {
+    let renamed =
+        app.macro_name_draft.trim() != current.name && !app.macro_name_draft.trim().is_empty();
+    let delete: Element<'_, Message> = if app.confirm_delete {
+        button("Really delete?")
+            .style(button::danger)
+            .on_press(Message::ConfirmDeleteMacro)
+            .into()
+    } else {
+        button("Delete")
+            .style(button::danger)
+            .on_press(Message::AskDeleteMacro)
+            .into()
+    };
+    let users: Vec<&str> = std::iter::once(&snapshot.default_profile)
+        .chain(&snapshot.profiles)
+        .filter(|profile| {
+            profile.bindings.values().any(
+                |binding| matches!(binding, Binding::Macro { name, .. } if *name == current.name),
+            )
+        })
+        .map(|profile| profile.name.as_str())
+        .collect();
+
+    let mut page = column![
+        text(&current.name).size(26),
+        row![
+            // Disabled while recording, so typed keys go to the recording
+            // and not into this box.
+            text_input("Macro name", &app.macro_name_draft)
+                .on_input_maybe(
+                    app.recording
+                        .is_none()
+                        .then_some(Message::MacroNameChanged as fn(String) -> Message)
+                )
+                .on_submit_maybe(app.recording.is_none().then_some(Message::RenameMacro))
+                .width(260),
+            button("Rename").on_press_maybe(renamed.then_some(Message::RenameMacro)),
+            delete,
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+        hint(if users.is_empty() {
+            "Not used yet. To use it, open a profile and set a button to \"Macro\".".to_string()
+        } else {
+            format!("Used by: {}", users.join(", "))
+        }),
+        space().height(4),
+    ]
+    .spacing(10);
+
+    if let Some(recording) = &app.recording {
+        page = page
+            .push(heading("Recording"))
+            .push(text(
+                "Type the keys on your keyboard now. The pauses between them are recorded too.",
+            ))
+            .push(
+                row![
+                    button("Stop recording").on_press(Message::StopRecording),
+                    hint("Click this with the mouse when you are done. Every key, including Esc, is recorded."),
+                ]
+                .spacing(12)
+                .align_y(Alignment::Center),
+            );
+        let mut steps = column![].spacing(4);
+        for step in &recording.steps {
+            steps = steps.push(text(keys::describe_step(step)).size(14));
+        }
+        if recording.steps.is_empty() {
+            steps = steps.push(hint("Nothing recorded yet."));
+        }
+        return page.push(steps).into();
+    }
+
+    page = page.push(heading("Steps")).push(
+        row![
+            button(if current.steps.is_empty() {
+                "Record from keyboard"
+            } else {
+                "Record again (replaces these steps)"
+            })
+            .on_press(Message::StartRecording),
+            hint(format!(
+                "{} steps, {} ms per pass",
+                current.steps.len(),
+                current.duration_ms()
+            )),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center),
+    );
+
+    for (index, step) in current.steps.iter().enumerate() {
+        let what: Element<'_, Message> = match step {
+            Step::Delay { ms } => {
+                let shown = app
+                    .delay_drafts
+                    .get(&index)
+                    .cloned()
+                    .unwrap_or_else(|| ms.to_string());
+                row![
+                    text("Wait"),
+                    text_input("ms", &shown)
+                        .on_input(move |text| Message::StepDelayChanged(index, text))
+                        .width(80),
+                    text("ms"),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .into()
+            }
+            other => text(keys::describe_step(other)).into(),
+        };
+        page = page.push(
+            row![
+                text(format!("{}.", index + 1)).width(36),
+                container(what).width(Length::Fill),
+                button("Up")
+                    .style(button::secondary)
+                    .on_press_maybe((index > 0).then_some(Message::MoveStep(index, Direction::Up))),
+                button("Down").style(button::secondary).on_press_maybe(
+                    (index + 1 < current.steps.len())
+                        .then_some(Message::MoveStep(index, Direction::Down))
+                ),
+                button("Remove")
+                    .style(button::danger)
+                    .on_press(Message::RemoveStep(index)),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+    }
+    if current.steps.is_empty() {
+        page = page.push(text("No steps yet. Record some, or add them below."));
+    }
+
+    let valid_all = app.delay_all_draft.trim().parse::<u32>().is_ok();
+    page = page
+        .push(space().height(4))
+        .push(heading("Edit"))
+        .push(
+            row![
+                combo_box(
+                    &app.key_choices,
+                    "Add a key press (type to search)",
+                    None,
+                    Message::AddKeyTap,
+                )
+                .width(280),
+                button("Add a wait")
+                    .style(button::secondary)
+                    .on_press(Message::AddDelay),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        )
+        .push(
+            row![
+                text("Set every wait to"),
+                text_input("ms", &app.delay_all_draft)
+                    .on_input(Message::DelayAllChanged)
+                    .on_submit(Message::SetAllDelays)
+                    .width(80),
+                text("ms"),
+                button("Apply")
+                    .style(button::secondary)
+                    .on_press_maybe(valid_all.then_some(Message::SetAllDelays)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .push(hint(
+            "Whether timed macros are allowed in a competitive game is up to that game's rules.",
+        ));
+    page.into()
 }
 
 /// A binding in a few words, for dropdown labels.

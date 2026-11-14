@@ -54,8 +54,10 @@ impl State {
         let changed = wanted != self.active_profile;
         self.active_profile = wanted;
         for (device, engine) in self.engines.iter_mut().enumerate() {
-            engine.set_profile(self.loaded.table(device, wanted));
+            engine.set_profile(self.loaded.table(device, wanted), &mut self.out);
         }
+        // Switching cuts macros short; this releases the keys they held.
+        self.flush();
         if changed {
             log(&format!("profile: {}", self.loaded.profile_name(wanted)));
             self.notify_tray();

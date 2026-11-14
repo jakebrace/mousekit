@@ -23,7 +23,7 @@ mod tray;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -82,6 +82,10 @@ pub(crate) struct State {
     pub active: HashSet<PathBuf>,
     /// Scratch buffer for engine output.
     pub out: Vec<Event>,
+    /// When the daemon started. Macro timing is measured from here.
+    pub started: Instant,
+    /// Poked whenever a macro starts, so the macro timer wakes up.
+    pub macro_wake: Sender<()>,
     /// Poked whenever something the tray shows has changed.
     pub tray_refresh: Option<Sender<()>>,
 }
@@ -159,6 +163,7 @@ pub fn run() -> Result<(), String> {
         log("no focus backend; only the default profile is used unless you pick one by hand");
     }
 
+    let (macro_wake, macro_wakes) = mpsc::channel();
     let mut state = State {
         loaded,
         engines,
@@ -174,6 +179,8 @@ pub fn run() -> Result<(), String> {
         capture: None,
         active: HashSet::new(),
         out: Vec::new(),
+        started: Instant::now(),
+        macro_wake,
         tray_refresh: None,
     };
     state.apply_profile();
@@ -181,6 +188,9 @@ pub fn run() -> Result<(), String> {
         state.sync_autostart();
     }
     let shared: Shared = Arc::new(Mutex::new(state));
+
+    let timer_state = shared.clone();
+    thread::spawn(move || run_macro_timer(timer_state, macro_wakes));
 
     service::serve(&connection, shared.clone())?;
     if isolated.is_none() {
@@ -192,6 +202,43 @@ pub fn run() -> Result<(), String> {
     }
 
     watch_for_mice(shared)
+}
+
+/// Plays macros: sleeps until the next macro step is due, performs it, and
+/// repeats. With no macro playing it sleeps until one starts.
+fn run_macro_timer(shared: Shared, wakes: Receiver<()>) {
+    loop {
+        let wait = {
+            let mut guard = lock(&shared);
+            // Reborrow so the fields can be borrowed separately.
+            let state = &mut *guard;
+            let now = state.started.elapsed();
+            let mut next: Option<Duration> = None;
+            for engine in &mut state.engines {
+                engine.advance(now, &mut state.out);
+                next = match (next, engine.next_wake()) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+            }
+            state.flush();
+            next.map(|at| at.saturating_sub(state.started.elapsed()))
+        };
+        match wait {
+            Some(wait) => {
+                if wakes.recv_timeout(wait) == Err(RecvTimeoutError::Disconnected) {
+                    return;
+                }
+            }
+            None => {
+                if wakes.recv().is_err() {
+                    return;
+                }
+            }
+        }
+        // Several pokes mean the same thing as one.
+        while wakes.try_recv().is_ok() {}
+    }
 }
 
 /// Keeps the focus backend running, retrying while it cannot start.
