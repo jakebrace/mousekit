@@ -469,6 +469,25 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
     assert!(!new_path.exists());
     assert!(busctl("DeleteProfile", "s", &["Default"]).contains("cannot be deleted"));
 
+    // Removing the mouse restarts the daemon without it; the fake mouse
+    // then shows up as available, and adding it back restarts again.
+    busctl("RemoveDevice", "u", &["0"]);
+    daemon.wait_for_status("connected: none");
+    assert!(!daemon.command("status").contains("device:"));
+    let snapshot = busctl("GetSnapshot", "", &[]);
+    assert!(snapshot.contains("available_mice") && snapshot.contains("1209:0f01"));
+    assert!(busctl("AddDevice", "ss", &["not-an-id", "x"]).contains("must look like"));
+    busctl("AddDevice", "ss", &["1209:0f01", "Fake Again"]);
+    daemon.wait_for_status("connected: /dev/input/event");
+    assert!(daemon.command("status").contains("device: Fake Again"));
+    // The restart made a new virtual device; a freshly added mouse has no
+    // named buttons, so everything passes through.
+    let mut output = grab_output();
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::BTN_SIDE, 1);
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::BTN_SIDE, 0);
+
     // A second daemon refuses to start while the first is running.
     let second = daemon
         .cli(&["daemon"])

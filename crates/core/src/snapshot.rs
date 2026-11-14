@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::DeviceConfig;
+use crate::config::{DeviceConfig, DeviceId};
 use crate::error::ConfigError;
 use crate::macros::Macro;
 use crate::profile::Profile;
@@ -26,6 +26,10 @@ pub struct Snapshot {
     pub macros: Vec<Macro>,
     #[serde(default)]
     pub devices: Vec<DeviceSnapshot>,
+    /// Mice that are plugged in but not in the config yet, for the "add a
+    /// mouse" page.
+    #[serde(default)]
+    pub available_mice: Vec<AvailableMouse>,
     /// Application windows open right now, for the "add from running
     /// windows" picker.
     #[serde(default)]
@@ -63,6 +67,12 @@ impl HardwareInfo {
             .copied()
             .min_by_key(|value| value.abs_diff(wanted))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AvailableMouse {
+    pub id: DeviceId,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -125,6 +135,10 @@ mod tests {
                     }),
                 })
                 .collect(),
+            available_mice: vec![AvailableMouse {
+                id: "1234:abcd".parse().unwrap(),
+                name: "Another Mouse".into(),
+            }],
             windows: vec![WindowSummary {
                 class: "steam_app_1422450".into(),
                 title: "Deadlock \"quoted\" title\twith tab".into(),
@@ -141,6 +155,7 @@ mod tests {
             profiles: Vec::new(),
             macros: Vec::new(),
             devices: Vec::new(),
+            available_mice: Vec::new(),
             windows: Vec::new(),
             ..snapshot
         };

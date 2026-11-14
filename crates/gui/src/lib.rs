@@ -29,7 +29,16 @@ pub fn run() -> Result<(), String> {
     iced::application(App::new, App::update, view::view)
         .title("MouseKit")
         .subscription(App::subscription)
-        .window_size((980.0, 680.0))
+        .window(iced::window::Settings {
+            size: iced::Size::new(980.0, 680.0),
+            // Matches the name of the installed .desktop file, which is how
+            // the desktop finds the window's icon and name.
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: "io.github.jakebrace.mousekit".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .run()
         .map_err(|error| format!("cannot open the settings window: {error}"))
 }
@@ -39,6 +48,8 @@ pub fn run() -> Result<(), String> {
 pub(crate) enum Page {
     /// A mouse, by its position in the config.
     Device(usize),
+    /// The list of plugged-in mice that can be added.
+    AddMouse,
     /// A profile, by name.
     Profile(String),
     /// A macro, by name.
@@ -76,6 +87,9 @@ pub(crate) enum Message {
     StartCapture,
     StopCapture,
     MoveControl(String, Direction),
+    AddMouse(String, String),
+    AskRemoveDevice,
+    ConfirmRemoveDevice,
     DpiDraftChanged(String),
     ApplyDpiDraft,
     SetDpi(u32),
@@ -141,6 +155,11 @@ pub(crate) struct App {
     pub snapshot: Option<Snapshot>,
     /// Why the daemon could not be reached, when it cannot.
     pub offline: Option<String>,
+    /// True once this window has started the daemon itself, so it only
+    /// tries once.
+    pub started_daemon: bool,
+    /// True once the first snapshot has been used to pick a starting page.
+    chose_first_page: bool,
     /// The last action that failed, until dismissed.
     pub error: Option<String>,
     pub page: Page,
@@ -177,6 +196,8 @@ impl App {
             client: Client::connect(),
             snapshot: None,
             offline: None,
+            started_daemon: false,
+            chose_first_page: false,
             error: None,
             page: Page::Device(0),
             capturing: false,
@@ -213,14 +234,44 @@ impl App {
                 let gone = match &self.page {
                     Page::Profile(name) => profile_in(&snapshot, name).is_none(),
                     Page::Macro(name) => !snapshot.macros.iter().any(|m| m.name == *name),
-                    Page::Device(_) => false,
+                    // A mouse page may briefly be one past the end right after
+                    // adding a mouse, while the daemon restarts.
+                    Page::Device(index) => *index > snapshot.devices.len(),
+                    Page::AddMouse => false,
                 };
-                if gone {
-                    self.open(Page::Profile(snapshot.default_profile.name.clone()));
+                // With no mouse set up there is only one useful place to be.
+                let first_page = (!self.chose_first_page && snapshot.devices.is_empty())
+                    .then_some(Page::AddMouse);
+                self.chose_first_page = true;
+                if let Some(page) = first_page {
+                    self.open(page);
+                } else if gone {
+                    self.open(match snapshot.devices.is_empty() {
+                        true => Page::AddMouse,
+                        false => Page::Device(0),
+                    });
                 }
                 self.snapshot = Some(snapshot);
             }
             Err(error) => {
+                // Opening the settings window is how most people first run
+                // the app, so start the daemon if nobody has. It carries on
+                // after this window closes, and sets up its own autostart.
+                if !self.started_daemon && self.snapshot.is_none() && error.contains("not running")
+                {
+                    self.started_daemon = true;
+                    let started = std::env::current_exe().and_then(|exe| {
+                        std::process::Command::new(exe)
+                            .arg("daemon")
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn()
+                    });
+                    if let Err(start_error) = started {
+                        self.error = Some(format!("cannot start the daemon: {start_error}"));
+                    }
+                }
                 self.offline = Some(error);
                 // The connection may have been made before the daemon
                 // started; try again from scratch next time.
@@ -432,6 +483,23 @@ impl App {
                 }
             }
             Message::StopCapture => self.stop_capture(),
+            Message::AddMouse(id, name) => {
+                if self.act(|client| client.add_device(&id, &name)) {
+                    // The daemon restarts to pick the mouse up; the new
+                    // mouse is the last one in the list when it is back.
+                    let position = self.snapshot.as_ref().map_or(0, |s| s.devices.len());
+                    self.open(Page::Device(position));
+                }
+            }
+            Message::AskRemoveDevice => self.confirm_delete = true,
+            Message::ConfirmRemoveDevice => {
+                if let Page::Device(index) = self.page {
+                    self.confirm_delete = false;
+                    if self.act(|client| client.remove_device(index)) {
+                        self.open(Page::AddMouse);
+                    }
+                }
+            }
             Message::DpiDraftChanged(text) => self.dpi_draft = text,
             Message::ApplyDpiDraft => {
                 // Snap what was typed to the nearest value the sensor has.

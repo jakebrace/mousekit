@@ -63,36 +63,29 @@ pub fn config_dir() -> Result<PathBuf, String> {
 /// app-specific profile.
 pub fn load(dir: &Path) -> Result<Loaded, String> {
     let config_path = dir.join("config.toml");
-    let text = fs::read_to_string(&config_path).map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            format!(
-                "no config file at {}\nCopy docs/examples/ from the repository to get started.",
-                config_path.display()
-            )
-        } else {
-            format!("cannot read {}: {error}", config_path.display())
-        }
-    })?;
+    let text = match fs::read_to_string(&config_path) {
+        Ok(text) => text,
+        // First run: start with an empty config. The settings window adds
+        // the first mouse, and the file is written then.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("cannot read {}: {error}", config_path.display())),
+    };
     let config =
         Config::from_toml(&text).map_err(|error| format!("{}: {error}", config_path.display()))?;
 
     let mut warnings = Vec::new();
     if config.devices.is_empty() {
-        warnings.push(format!(
-            "{} lists no [[device]], so there is nothing to remap",
-            config_path.display()
-        ));
+        warnings.push(
+            "no mouse is set up yet; open the settings window (mousekit gui) to add one".into(),
+        );
     }
 
     let profiles_dir = dir.join("profiles");
     let default_path = profiles_dir.join("default.toml");
     let default = match read_profile(&default_path) {
         Ok(profile) => profile,
+        // No default profile file simply means nothing is bound by default.
         Err(ReadError::Missing) => {
-            warnings.push(format!(
-                "no default profile at {}; every button passes through",
-                default_path.display()
-            ));
             Profile::from_toml("name = \"Default\"").expect("built-in profile is valid")
         }
         Err(ReadError::Other(message)) => return Err(message),

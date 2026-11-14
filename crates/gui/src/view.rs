@@ -21,20 +21,18 @@ const KIND_WIDTH: f32 = 210.0;
 
 pub(crate) fn view(app: &App) -> Element<'_, Message> {
     let Some(snapshot) = &app.snapshot else {
-        let reason = app
-            .offline
-            .as_deref()
-            .unwrap_or("Connecting to the daemon...");
-        return container(
-            column![
-                text("MouseKit").size(26),
-                text(reason),
-                text("Start it with:  mousekit daemon").style(text::secondary),
-            ]
-            .spacing(12),
-        )
-        .center(Length::Fill)
-        .into();
+        let reason = if app.started_daemon {
+            "Starting MouseKit..."
+        } else {
+            app.offline
+                .as_deref()
+                .unwrap_or("Connecting to the daemon...")
+        };
+        let mut message = column![text("MouseKit").size(26), text(reason)].spacing(12);
+        if let Some(error) = &app.error {
+            message = message.push(text(error).style(text::danger));
+        }
+        return container(message).center(Length::Fill).into();
     };
 
     let mut main = column![].spacing(16).padding(20);
@@ -57,8 +55,9 @@ pub(crate) fn view(app: &App) -> Element<'_, Message> {
     main = main.push(match &app.page {
         Page::Device(index) => match snapshot.devices.get(*index) {
             Some(device) => device_page(app, device),
-            None => text("This mouse is no longer in the config.").into(),
+            None => text("Setting up the mouse...").into(),
         },
+        Page::AddMouse => add_mouse_page(snapshot),
         Page::Profile(_) => match app.current_profile() {
             Some(profile) => profile_page(app, snapshot, profile),
             None => text("This profile no longer exists.").into(),
@@ -107,9 +106,11 @@ fn sidebar<'a>(app: &'a App, snapshot: &'a Snapshot) -> Element<'a, Message> {
             &app.page,
         ));
     }
-    if snapshot.devices.is_empty() {
-        list = list.push(hint("No mouse in config.toml"));
-    }
+    list = list.push(nav_button(
+        "Add a mouse...".to_string(),
+        Page::AddMouse,
+        &app.page,
+    ));
 
     list = list.push(space().height(12)).push(hint("PROFILES"));
     let profiles = std::iter::once(&snapshot.default_profile).chain(&snapshot.profiles);
@@ -174,6 +175,39 @@ fn sidebar<'a>(app: &'a App, snapshot: &'a Snapshot) -> Element<'a, Message> {
         .into()
 }
 
+// -------------------------------------------------------------- add a mouse
+
+fn add_mouse_page(snapshot: &Snapshot) -> Element<'_, Message> {
+    let mut page = column![
+        text("Add a mouse").size(26),
+        hint("Pick the mouse you want to remap. MouseKit only touches the mice you add here."),
+    ]
+    .spacing(10);
+    for mouse in &snapshot.available_mice {
+        page = page.push(
+            row![
+                column![text(&mouse.name), hint(format!("Device ID: {}", mouse.id))]
+                    .width(Length::Fill),
+                button("Add").on_press(Message::AddMouse(mouse.id.to_string(), mouse.name.clone())),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+    }
+    if snapshot.available_mice.is_empty() {
+        page = page.push(text(if snapshot.devices.is_empty() {
+            "No mouse found. Plug one in and it will appear here."
+        } else {
+            "No other mice found. Plug one in and it will appear here."
+        }));
+    }
+    page.push(hint(
+        "A wireless mouse shows up under its own name while its receiver is plugged in. If \
+         you later use the same mouse on a cable, it may appear as a second device.",
+    ))
+    .into()
+}
+
 // ---------------------------------------------------------------- device page
 
 fn device_page<'a>(app: &'a App, device: &'a DeviceSnapshot) -> Element<'a, Message> {
@@ -186,7 +220,20 @@ fn device_page<'a>(app: &'a App, device: &'a DeviceSnapshot) -> Element<'a, Mess
         } else {
             text("Not connected").style(text::secondary)
         },
-        hint(format!("Device ID: {}", ids.join(", "))),
+        row![
+            container(hint(format!("Device ID: {}", ids.join(", ")))).width(Length::Fill),
+            if app.confirm_delete {
+                button("Really remove this mouse?")
+                    .style(button::danger)
+                    .on_press(Message::ConfirmRemoveDevice)
+            } else {
+                button("Remove this mouse")
+                    .style(button::secondary)
+                    .on_press(Message::AskRemoveDevice)
+            },
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
         space().height(4),
         heading("Buttons"),
         hint(

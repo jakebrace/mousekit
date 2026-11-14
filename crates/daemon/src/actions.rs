@@ -127,7 +127,10 @@ impl State {
                 .zip(&self.loaded.config.devices)
                 .all(|(new, old)| new.ids == old.ids);
         if !same_devices {
-            return Err("the [[device]] list changed; restart the daemon to apply it".into());
+            // Reader threads are tied to the device list they started
+            // with, so a changed list is applied by starting afresh.
+            self.restart();
+            return Ok("the list of mice changed; the daemon is restarting to apply it".into());
         }
 
         // Profiles are tracked by position, and positions may have moved.
@@ -281,6 +284,34 @@ impl State {
                 session.unreported.push(trigger);
             }
         }
+    }
+}
+
+impl State {
+    /// Replaces the running daemon with a fresh copy of itself, which reads
+    /// the config from scratch. Used when the list of mice changes. Held
+    /// keys are released first; the restart is slightly delayed so whoever
+    /// asked gets its reply.
+    pub fn restart(&mut self) {
+        use std::os::unix::process::CommandExt;
+
+        self.release_everything();
+        if let Some(backend) = &self.focus_backend {
+            backend.cleanup();
+        }
+        log("restarting to apply a changed list of mice");
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(150));
+            // exec() replaces this process in place: same process ID, every
+            // device closed (which drops the grabs), then a clean start.
+            let error = match std::env::current_exe() {
+                Ok(exe) => std::process::Command::new(exe).arg("daemon").exec(),
+                Err(error) => error,
+            };
+            // Only reached if the restart could not happen.
+            log(&format!("cannot restart: {error}; exiting"));
+            std::process::exit(1);
+        });
     }
 }
 

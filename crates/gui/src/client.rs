@@ -86,6 +86,14 @@ impl Client {
         self.call("SaveDevice", &(index as u32, device.to_toml()))
     }
 
+    pub fn add_device(&self, id: &str, name: &str) -> Result<(), String> {
+        self.call("AddDevice", &(id, name))
+    }
+
+    pub fn remove_device(&self, index: usize) -> Result<(), String> {
+        self.call("RemoveDevice", &(index as u32,))
+    }
+
     pub fn set_dpi(&self, index: usize, dpi: u32) -> Result<(), String> {
         self.call("SetDpi", &(index as u32, dpi))
     }

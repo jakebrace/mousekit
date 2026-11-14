@@ -162,6 +162,21 @@ impl Api {
             .map_err(fdo::Error::Failed)
     }
 
+    /// Adds a mouse by its vendor:product ID (as listed in the snapshot's
+    /// `available_mice`). The daemon restarts itself to pick it up.
+    fn add_device(&self, id: &str, name: &str) -> fdo::Result<()> {
+        lock(&self.shared)
+            .add_device(id, name)
+            .map_err(fdo::Error::Failed)
+    }
+
+    /// Removes a mouse from the config. The daemon restarts itself.
+    fn remove_device(&self, index: u32) -> fdo::Result<()> {
+        lock(&self.shared)
+            .remove_device(index as usize)
+            .map_err(fdo::Error::Failed)
+    }
+
     /// Sets a mouse's sensor resolution now and saves it for next time.
     /// Blocks while the mouse is asked, usually well under a second.
     fn set_dpi(&self, index: u32, dpi: u32) -> fdo::Result<()> {

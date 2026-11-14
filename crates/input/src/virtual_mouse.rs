@@ -10,8 +10,8 @@ use mousekit_core::{Event, Key};
 
 /// Fixed identity. The desktop stores pointer settings (acceleration) per
 /// device name and ID, so these must not change between runs.
-/// 0x1209 is the pid.codes open-source vendor ID; the product ID is a
-/// placeholder to settle before any public release.
+/// 0x1209 is the pid.codes open-source vendor ID; the product ID is not
+/// registered there, which only matters if it ever clashes locally.
 const VENDOR: u16 = 0x1209;
 const PRODUCT: u16 = 0x5351;
 
@@ -22,6 +22,13 @@ pub struct VirtualMouse {
 }
 
 impl VirtualMouse {
+    /// The vendor:product pair of the device, so callers can tell it apart
+    /// from real mice.
+    pub const ID: mousekit_core::DeviceId = mousekit_core::DeviceId {
+        vendor: VENDOR,
+        product: PRODUCT,
+    };
+
     /// The name the real daemon uses.
     pub const NAME: &'static str = "mousekit virtual mouse";
 

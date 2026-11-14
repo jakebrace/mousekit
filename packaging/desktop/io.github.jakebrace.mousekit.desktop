@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MouseKit
+GenericName=Mouse Button Remapper
+Comment=Remap mouse buttons with profiles that follow the focused app
+Exec=mousekit gui
+Icon=input-mouse
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=mouse;button;remap;macro;dpi;profile;gaming;

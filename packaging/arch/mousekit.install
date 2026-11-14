@@ -1,0 +1,16 @@
+post_install() {
+  # Apply the permission rule to devices that are already plugged in, and
+  # load the kernel module the virtual device needs, so no reboot is needed.
+  udevadm control --reload-rules 2>/dev/null
+  udevadm trigger --subsystem-match=input --subsystem-match=hidraw --subsystem-match=misc 2>/dev/null
+  modprobe uinput 2>/dev/null
+
+  echo ">>> MouseKit is installed. Open it from the application menu, or run: mousekit gui"
+  echo ">>> It starts its background service on first launch and at every login after that."
+}
+
+post_upgrade() {
+  udevadm control --reload-rules 2>/dev/null
+  udevadm trigger --subsystem-match=input --subsystem-match=hidraw --subsystem-match=misc 2>/dev/null
+  echo ">>> MouseKit was upgraded. Restart it to use the new version: mousekit quit; mousekit gui"
+}

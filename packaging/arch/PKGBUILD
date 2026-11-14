@@ -1,0 +1,68 @@
+# Maintainer: Jake (https://github.com/jakebrace)
+#
+# Builds the latest commit from GitHub. To build from a local checkout
+# instead, see the "Building the package locally" section of the README.
+
+pkgname=mousekit-git
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc="Remap mouse buttons with profiles that follow the focused app"
+arch=('x86_64')
+url="https://github.com/jakebrace/mousekit"
+license=('GPL-3.0-or-later')
+depends=('gcc-libs' 'glibc' 'libxkbcommon' 'wayland')
+makedepends=('cargo' 'git')
+optdepends=(
+  'kwin: automatic profile switching on KDE Plasma'
+  'libx11: settings window on X11'
+  'libxcursor: settings window on X11'
+  'libxkbcommon-x11: settings window on X11'
+)
+provides=('mousekit')
+conflicts=('mousekit')
+install=mousekit.install
+source=("mousekit::git+https://github.com/jakebrace/mousekit.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd mousekit
+  local version
+  version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+  printf '%s.r%s.g%s' "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd mousekit
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd mousekit
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --package mousekit
+}
+
+check() {
+  cd mousekit
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # Tests that need real input devices are marked #[ignore] and do not run.
+  cargo test --frozen --release --workspace
+}
+
+package() {
+  cd mousekit
+  install -Dm755 target/release/mousekit "$pkgdir/usr/bin/mousekit"
+  install -Dm644 packaging/udev/70-mousekit.rules \
+    "$pkgdir/usr/lib/udev/rules.d/70-mousekit.rules"
+  install -Dm644 packaging/modules-load/mousekit.conf \
+    "$pkgdir/usr/lib/modules-load.d/mousekit.conf"
+  install -Dm644 packaging/desktop/io.github.jakebrace.mousekit.desktop \
+    "$pkgdir/usr/share/applications/io.github.jakebrace.mousekit.desktop"
+  install -Dm644 packaging/desktop/io.github.jakebrace.mousekit.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/io.github.jakebrace.mousekit.metainfo.xml"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/mousekit/README.md"
+  cp -r docs/examples "$pkgdir/usr/share/doc/mousekit/examples"
+}

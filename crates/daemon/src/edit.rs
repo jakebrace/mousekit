@@ -8,21 +8,41 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mousekit_core::{
-    Binding, Config, DeviceConfig, DeviceSnapshot, Macro, Profile, Snapshot, WindowSummary,
-    check_macros, check_profiles, resolve,
+    AvailableMouse, Binding, Config, DeviceConfig, DeviceId, DeviceSnapshot, Macro, Profile,
+    Snapshot, WindowSummary, check_macros, check_profiles, resolve,
 };
+use mousekit_input::VirtualMouse;
 
 use crate::State;
 
 impl State {
     /// Everything the GUI shows, in one value.
     pub fn snapshot(&self) -> Snapshot {
-        let connected_ids: Vec<_> = mousekit_input::list_nodes()
-            .unwrap_or_default()
-            .into_iter()
+        let nodes = mousekit_input::list_nodes().unwrap_or_default();
+        let connected_ids: Vec<_> = nodes
+            .iter()
             .filter(|node| self.active.contains(&node.path))
             .map(|node| node.id)
             .collect();
+        // Mice that are plugged in but not set up: anything that looks like
+        // a mouse, is not already in the config, and is not our own
+        // virtual device.
+        let mut available_mice: Vec<AvailableMouse> = Vec::new();
+        for node in &nodes {
+            let configured = self
+                .loaded
+                .config
+                .devices
+                .iter()
+                .any(|device| device.ids.contains(&node.id));
+            let listed = available_mice.iter().any(|mouse| mouse.id == node.id);
+            if node.is_mouse && !configured && !listed && node.id != VirtualMouse::ID {
+                available_mice.push(AvailableMouse {
+                    id: node.id,
+                    name: node.name.clone(),
+                });
+            }
+        }
         Snapshot {
             paused: self.paused,
             active_profile: self.loaded.profile_name(self.active_profile).to_string(),
@@ -50,6 +70,7 @@ impl State {
                     device
                 })
                 .collect(),
+            available_mice,
             windows: self
                 .windows
                 .iter()
@@ -147,6 +168,42 @@ impl State {
 
         write_file(&self.loaded.dir.join("config.toml"), &config.to_toml())?;
         self.reload().map(|_| ())
+    }
+
+    /// Adds a mouse to the config by its vendor:product ID. The daemon then
+    /// restarts itself to pick it up, which takes a moment.
+    pub fn add_device(&mut self, id: &str, name: &str) -> Result<(), String> {
+        let id: DeviceId = id.parse()?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("a mouse needs a name".into());
+        }
+        let mut config = self.loaded.config.clone();
+        config.devices.push(DeviceConfig {
+            ids: vec![id],
+            name: name.to_string(),
+            dpi: None,
+            polling_hz: None,
+            controls: Vec::new(),
+        });
+        // Catches a mouse that is already in the config.
+        config.validate().map_err(|error| error.to_string())?;
+        write_file(&self.loaded.dir.join("config.toml"), &config.to_toml())?;
+        self.restart();
+        Ok(())
+    }
+
+    /// Removes a mouse from the config, then restarts the daemon. Bindings
+    /// for its buttons stay in the profiles, unused.
+    pub fn remove_device(&mut self, index: usize) -> Result<(), String> {
+        let mut config = self.loaded.config.clone();
+        if index >= config.devices.len() {
+            return Err(format!("there is no device number {index}"));
+        }
+        config.devices.remove(index);
+        write_file(&self.loaded.dir.join("config.toml"), &config.to_toml())?;
+        self.restart();
+        Ok(())
     }
 
     /// Records a mouse's DPI and/or report rate in `config.toml`, so they

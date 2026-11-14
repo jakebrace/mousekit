@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jakebrace.mousekit</id>
+  <name>MouseKit</name>
+  <summary>Remap mouse buttons per application</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.jakebrace">
+    <name>Jake</name>
+  </developer>
+  <description>
+    <p>
+      MouseKit remaps the buttons of your mouse and switches between sets of
+      bindings automatically as you move between applications, so the same
+      button can do one thing in a game and another in your browser.
+    </p>
+    <ul>
+      <li>Bind any mouse button or scroll direction to a key, a shortcut, another mouse button, or a macro</li>
+      <li>Profiles that activate when a chosen application has focus (KDE Plasma on Wayland)</li>
+      <li>Record macros from the keyboard and play them once, while held, or as a toggle</li>
+      <li>Set DPI and report rate on supported Logitech mice</li>
+      <li>Works in games running through Proton</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.jakebrace.mousekit.desktop</launchable>
+  <url type="homepage">https://github.com/jakebrace/mousekit</url>
+  <url type="bugtracker">https://github.com/jakebrace/mousekit/issues</url>
+  <url type="vcs-browser">https://github.com/jakebrace/mousekit</url>
+  <categories>
+    <category>Settings</category>
+    <category>HardwareSettings</category>
+  </categories>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-14">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
