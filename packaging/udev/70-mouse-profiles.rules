@@ -1,0 +1,8 @@
+# DRAFT, being validated in Milestone 0. Install to /etc/udev/rules.d/.
+# The file name must sort before 73-seat-late.rules for uaccess to apply.
+#
+# Grants the logged-in local user (not a group, not everyone) access to:
+#   - /dev/uinput, to create the virtual output device
+#   - every input node udev classifies as a mouse, to read and grab it
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_MOUSE}=="1", TAG+="uaccess"
