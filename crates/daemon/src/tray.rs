@@ -6,11 +6,14 @@
 //! what it displays (`View`); a small thread refreshes that copy whenever
 //! the daemon's state changes.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
 use ksni::blocking::TrayMethods;
 use ksni::menu::{CheckmarkItem, MenuItem, RadioGroup, RadioItem, StandardItem, SubMenu};
+
+use mousekit_core::dbus::APP_ID;
 
 use crate::{Shared, State, actions, lock, log};
 
@@ -77,7 +80,7 @@ impl ksni::Tray for Tray {
 
     /// Left-clicking the icon opens the settings window.
     fn activate(&mut self, _x: i32, _y: i32) {
-        open_settings();
+        open_settings(&self.shared);
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
@@ -111,7 +114,7 @@ impl ksni::Tray for Tray {
         vec![
             StandardItem {
                 label: "Open settings".into(),
-                activate: Box::new(|_: &mut Tray| open_settings()),
+                activate: Box::new(|tray: &mut Tray| open_settings(&tray.shared)),
                 ..Default::default()
             }
             .into(),
@@ -172,10 +175,36 @@ impl ksni::Tray for Tray {
     }
 }
 
-/// Starts the settings window as its own process (`mousekit gui`), so
+/// True from starting the settings window until that process exits, so a
+/// second click while it is still opening does not start another.
+static SETTINGS_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Shows the settings window: brings it to the front if it is already
+/// open, and otherwise starts it as its own process (`mousekit gui`), so
 /// the daemon never loads the GUI toolkit and a GUI crash cannot interrupt
 /// remapping.
-fn open_settings() {
+fn open_settings(shared: &Shared) {
+    let (backend, is_open) = {
+        let state = lock(shared);
+        let is_open = state
+            .windows
+            .iter()
+            .any(|window| window.class.eq_ignore_ascii_case(APP_ID));
+        (state.focus_backend.clone(), is_open)
+    };
+    if is_open && let Some(backend) = backend {
+        match backend.activate(APP_ID) {
+            Ok(()) => return,
+            Err(error) => log(&format!(
+                "cannot bring the settings window to the front: {error}"
+            )),
+        }
+    }
+    if SETTINGS_RUNNING.swap(true, Ordering::SeqCst) {
+        // Already started by us and still opening (or the desktop cannot
+        // tell us about windows, in which case one window is enough).
+        return;
+    }
     let started =
         std::env::current_exe().and_then(|exe| std::process::Command::new(exe).arg("gui").spawn());
     match started {
@@ -184,9 +213,13 @@ fn open_settings() {
         Ok(mut child) => {
             thread::spawn(move || {
                 let _ = child.wait();
+                SETTINGS_RUNNING.store(false, Ordering::SeqCst);
             });
         }
-        Err(error) => log(&format!("cannot open the settings window: {error}")),
+        Err(error) => {
+            SETTINGS_RUNNING.store(false, Ordering::SeqCst);
+            log(&format!("cannot open the settings window: {error}"));
+        }
     }
 }
 

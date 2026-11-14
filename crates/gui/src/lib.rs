@@ -34,7 +34,7 @@ pub fn run() -> Result<(), String> {
             // Matches the name of the installed .desktop file, which is how
             // the desktop finds the window's icon and name.
             platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: "io.github.jakebrace.mousekit".into(),
+                application_id: mousekit_core::dbus::APP_ID.into(),
                 ..Default::default()
             },
             ..Default::default()

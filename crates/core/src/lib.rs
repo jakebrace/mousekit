@@ -17,6 +17,9 @@ pub mod config;
 /// These follow the app ID, `io.github.jakebrace.mousekit`.
 pub mod dbus {
     pub const BUS_NAME: &str = "io.github.jakebrace.mousekit";
+    /// The settings window's application ID, which is also its window
+    /// class and the name of the installed .desktop file.
+    pub const APP_ID: &str = "io.github.jakebrace.mousekit";
     pub const OBJECT_PATH: &str = "/io/github/jakebrace/mousekit";
     pub const INTERFACE: &str = "io.github.jakebrace.mousekit.Daemon1";
     /// Environment variable that selects an isolated test instance; its

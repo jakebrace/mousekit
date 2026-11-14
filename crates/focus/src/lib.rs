@@ -31,6 +31,10 @@ pub trait FocusBackend: Send + Sync {
     /// if it cannot start or loses its connection.
     fn run(&self, on_focus: OnFocus) -> Result<(), String>;
 
+    /// Brings an open window with this window class to the front, restoring
+    /// it if minimised. Does nothing if there is no such window.
+    fn activate(&self, class: &str) -> Result<(), String>;
+
     /// Undoes anything `run` left behind in the desktop. Safe to call from
     /// another thread while `run` is blocked, and when `run` never started.
     fn cleanup(&self);

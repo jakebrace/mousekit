@@ -20,6 +20,9 @@ const SCRIPT_NAME: &str = "mousekit-focus";
 /// KWin loads scripts from a file, so the embedded script is written out
 /// at startup.
 const SCRIPT_SOURCE: &str = include_str!("focus.js");
+/// The one-off script that brings a window to the front.
+const ACTIVATE_NAME: &str = "mousekit-activate";
+const ACTIVATE_SOURCE: &str = include_str!("activate.js");
 
 const KWIN: &str = "org.kde.KWin";
 const SCRIPTING_PATH: &str = "/Scripting";
@@ -36,11 +39,22 @@ impl FocusBackend for Kde {
         run(on_focus)
     }
 
+    fn activate(&self, class: &str) -> Result<(), String> {
+        let conn =
+            Connection::session().map_err(|e| format!("cannot connect to the session bus: {e}"))?;
+        // Rust's quoting of a plain string is also valid JavaScript.
+        let source = format!("const CLASS = {class:?};\n{ACTIVATE_SOURCE}");
+        // KWin runs the script shortly after being asked, so it is left
+        // loaded; the next call (or cleanup) unloads it.
+        run_script(&conn, ACTIVATE_NAME, &source)
+    }
+
     fn cleanup(&self) {
         // Best effort: a script left behind only calls a service that is no
         // longer there, and the next start unloads it anyway.
         if let Ok(conn) = Connection::session() {
-            let _ = unload_script(&conn);
+            let _ = unload_script(&conn, SCRIPT_NAME);
+            let _ = unload_script(&conn, ACTIVATE_NAME);
         }
     }
 }
@@ -134,15 +148,21 @@ fn run(on_focus: OnFocus) -> Result<(), String> {
     Err("lost the connection to the session bus".into())
 }
 
-/// Unloads any stale copy of the script, then loads and starts a fresh one.
+/// Loads and starts the focus script.
 fn load_script(conn: &Connection) -> Result<(), String> {
-    unload_script(conn).map_err(|e| format!("cannot reach KWin's scripting interface: {e}"))?;
+    run_script(conn, SCRIPT_NAME, SCRIPT_SOURCE)
+}
+
+/// Unloads any stale copy of the script called `name`, then loads and
+/// starts a fresh one from `source`.
+fn run_script(conn: &Connection, name: &str, source: &str) -> Result<(), String> {
+    unload_script(conn, name)
+        .map_err(|e| format!("cannot reach KWin's scripting interface: {e}"))?;
 
     let runtime_dir =
         std::env::var("XDG_RUNTIME_DIR").map_err(|_| "XDG_RUNTIME_DIR is not set".to_string())?;
-    let script_path = format!("{runtime_dir}/{SCRIPT_NAME}.js");
-    std::fs::write(&script_path, SCRIPT_SOURCE)
-        .map_err(|e| format!("cannot write {script_path}: {e}"))?;
+    let script_path = format!("{runtime_dir}/{name}.js");
+    std::fs::write(&script_path, source).map_err(|e| format!("cannot write {script_path}: {e}"))?;
 
     let reply = conn
         .call_method(
@@ -150,16 +170,16 @@ fn load_script(conn: &Connection) -> Result<(), String> {
             SCRIPTING_PATH,
             Some(SCRIPTING_INTERFACE),
             "loadScript",
-            &(script_path.as_str(), SCRIPT_NAME),
+            &(script_path.as_str(), name),
         )
-        .map_err(|e| format!("KWin refused to load the focus script: {e}"))?;
+        .map_err(|e| format!("KWin refused to load the script {name}: {e}"))?;
     let script_id: i32 = reply
         .body()
         .deserialize()
         .map_err(|e| format!("unexpected reply from KWin's loadScript: {e}"))?;
     if script_id < 0 {
         return Err(format!(
-            "KWin did not load the focus script (id {script_id})"
+            "KWin did not load the script {name} (id {script_id})"
         ));
     }
 
@@ -171,18 +191,18 @@ fn load_script(conn: &Connection) -> Result<(), String> {
         "run",
         &(),
     )
-    .map_err(|e| format!("KWin loaded the focus script but could not run it: {e}"))?;
+    .map_err(|e| format!("KWin loaded the script {name} but could not run it: {e}"))?;
     Ok(())
 }
 
-/// Asks KWin to unload our script. Returns whether a copy was loaded.
-fn unload_script(conn: &Connection) -> zbus::Result<bool> {
+/// Asks KWin to unload one of our scripts. Returns whether a copy was loaded.
+fn unload_script(conn: &Connection, name: &str) -> zbus::Result<bool> {
     let reply = conn.call_method(
         Some(KWIN),
         SCRIPTING_PATH,
         Some(SCRIPTING_INTERFACE),
         "unloadScript",
-        &(SCRIPT_NAME,),
+        &(name,),
     )?;
     reply.body().deserialize()
 }
