@@ -29,3 +29,4 @@ rustc-ice-*.txt
 /packaging/arch/pkg/
 /packaging/arch/mousekit/
 /packaging/arch/PKGBUILD.local
+/dist/
