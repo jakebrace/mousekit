@@ -9,7 +9,7 @@ use std::time::Duration;
 use zbus::blocking::{Connection, connection, fdo};
 use zbus::interface;
 
-use crate::{FocusBackend, OnFocus, Window, WindowKind, exe_name};
+use crate::{FocusBackend, FocusEvent, OnFocus, Window, WindowKind, exe_name};
 
 /// This backend's own name on the session bus, separate from the daemon's
 /// control interface. Must match SERVICE in focus.js. A placeholder until
@@ -60,14 +60,37 @@ impl Listener {
             "lock" => WindowKind::LockScreen,
             _ => WindowKind::Shell,
         };
-        let exe = pid.parse().ok().filter(|pid| *pid != 0).and_then(exe_name);
-        (self.on_focus)(Window {
+        (self.on_focus)(FocusEvent::Focused(Window {
             class: class.to_string(),
             title: title.to_string(),
-            exe,
+            exe: exe_of(pid),
             kind,
-        });
+        }));
     }
+
+    /// One window per line, as "class<TAB>pid<TAB>title".
+    fn windows_changed(&self, list: &str) {
+        let windows = list
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.splitn(3, '\t');
+                let class = fields.next()?;
+                let pid = fields.next()?;
+                let title = fields.next().unwrap_or("");
+                Some(Window {
+                    class: class.to_string(),
+                    title: title.to_string(),
+                    exe: exe_of(pid),
+                    kind: WindowKind::App,
+                })
+            })
+            .collect();
+        (self.on_focus)(FocusEvent::Windows(windows));
+    }
+}
+
+fn exe_of(pid: &str) -> Option<String> {
+    pid.parse().ok().filter(|pid| *pid != 0).and_then(exe_name)
 }
 
 fn run(on_focus: OnFocus) -> Result<(), String> {

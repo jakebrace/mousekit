@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 mouse-profiles-daemon = { path = "../daemon" }
+mouse-profiles-gui = { path = "../gui" }
 
 [dev-dependencies]
 evdev = "0.13.2"

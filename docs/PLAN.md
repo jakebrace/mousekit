@@ -353,7 +353,7 @@ The first three need answers from your machine before Milestone 1; the rest are 
 - [ ] **Do you launch games through gamescope?** Answered: probably not, games run straight from Steam. Confirm in Steam that no game has gamescope in its launch options; spike (b) will show it either way.
 - [ ] **Project name and app ID.** The Flatpak ID (`io.github.<user>.<App>`) is hard to change after release, so settle the name before Milestone 7.
 - [ ] **License.** GPL-3.0 matches most tools in this space; MIT or Apache-2.0 is fine too since ratbagd is reached over D-Bus, not linked.
-- [ ] **GUI toolkit.** iced or egui, per the Repo layout note.
+- [x] **GUI toolkit.** Decided in Milestone 4: `iced` pinned to exactly 0.14.0, built with software rendering only (`tiny-skia`, no `wgpu`) to keep the build and binary small. Structured data between GUI and daemon travels over D-Bus as TOML text using the `core` types.
 - [ ] **Overlay or independent profiles?** The plan has profiles inherit unbound controls from the default. Logitech's software treats each profile as standalone; say if you prefer that.
 - [ ] **Multiple mice.** Should a profile's bindings apply per device, or to whichever mouse is connected? The data model above is per-device labels with shared profiles.
 

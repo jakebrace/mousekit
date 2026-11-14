@@ -15,6 +15,7 @@
 
 mod actions;
 mod autostart;
+mod edit;
 pub mod load;
 mod reader;
 pub mod service;
@@ -28,7 +29,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use mouse_profiles_core::{Engine, Event, Trigger, Window};
-use mouse_profiles_focus::FocusBackend;
+use mouse_profiles_focus::{FocusBackend, FocusEvent};
 use mouse_profiles_input::{Mouse, NodeInfo, VirtualMouse, list_nodes};
 
 use crate::load::Loaded;
@@ -41,15 +42,16 @@ const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 /// daemon can start before the window manager is ready.
 const FOCUS_RETRY: Duration = Duration::from_secs(5);
 
-/// Where a button capture stands.
-pub(crate) enum Capture {
-    Idle,
-    /// Waiting for the next press or scroll tick. Gives up at the deadline,
-    /// so a client that vanishes cannot leave remapping suspended.
-    Waiting {
-        deadline: Instant,
-    },
-    Done(Trigger),
+/// A button capture in progress: while it lasts, remapping is suspended and
+/// every button pressed is recorded instead of acted on.
+pub(crate) struct CaptureSession {
+    /// The session ends by itself when nothing has been pressed for a
+    /// while, so a client that vanishes cannot leave the mouse captured.
+    pub deadline: Instant,
+    /// Everything captured so far, each once.
+    pub seen: Vec<Trigger>,
+    /// Captured but not yet collected by `PollCapture`.
+    pub unreported: Vec<Trigger>,
 }
 
 /// Everything the threads share.
@@ -69,10 +71,13 @@ pub(crate) struct State {
     /// The most recently focused app windows, newest first, one per window
     /// class. `status` lists them so you can look up a class for a profile.
     pub recent: Vec<Window>,
+    /// Application windows open right now, as the focus backend last
+    /// reported them.
+    pub windows: Vec<Window>,
     /// "kde", or why focus switching is off.
     pub focus_status: String,
     pub focus_backend: Option<Arc<dyn FocusBackend>>,
-    pub capture: Capture,
+    pub capture: Option<CaptureSession>,
     /// Nodes that currently have a reader thread.
     pub active: HashSet<PathBuf>,
     /// Scratch buffer for engine output.
@@ -101,7 +106,7 @@ pub(crate) fn log(message: &str) {
 /// daemon: its own bus name and virtual device, and no tray, focus backend
 /// or autostart file. Never set in normal use.
 pub(crate) fn instance() -> Option<String> {
-    std::env::var("MOUSE_PROFILES_INSTANCE")
+    std::env::var(mouse_profiles_core::dbus::INSTANCE_VARIABLE)
         .ok()
         .filter(|name| !name.is_empty())
 }
@@ -163,9 +168,10 @@ pub fn run() -> Result<(), String> {
         override_profile: None,
         active_profile: None,
         recent: Vec::new(),
+        windows: Vec::new(),
         focus_status,
         focus_backend: focus_backend.clone(),
-        capture: Capture::Idle,
+        capture: None,
         active: HashSet::new(),
         out: Vec::new(),
         tray_refresh: None,
@@ -197,8 +203,12 @@ fn run_focus_backend(backend: Arc<dyn FocusBackend>, shared: Shared) {
             state.focus_status = backend.name().to_string();
         }
         let callback_state = shared.clone();
-        let result = backend.run(Box::new(move |window| {
-            lock(&callback_state).window_focused(window);
+        let result = backend.run(Box::new(move |event| {
+            let mut state = lock(&callback_state);
+            match event {
+                FocusEvent::Focused(window) => state.window_focused(window),
+                FocusEvent::Windows(windows) => state.windows = windows,
+            }
         }));
         // run() only returns when the backend cannot work.
         let reason = result.err().unwrap_or_else(|| "backend stopped".into());

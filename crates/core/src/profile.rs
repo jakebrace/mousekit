@@ -6,13 +6,13 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::DeviceConfig;
 use crate::error::ConfigError;
 use crate::event::{Key, Trigger};
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub name: String,
@@ -24,7 +24,7 @@ pub struct Profile {
     pub bindings: BTreeMap<String, Binding>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct MatchRules {
     pub window_class: Vec<String>,
@@ -33,7 +33,7 @@ pub struct MatchRules {
 
 /// One entry in a profile's `[bindings]` table, e.g.
 /// `M4 = { type = "key", keys = ["KEY_LEFTALT", "KEY_TAB"] }`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Binding {
     /// One key, or modifiers plus a key, held while the button is held.
@@ -52,7 +52,7 @@ pub enum Binding {
     Disabled,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MacroMode {
     #[default]
@@ -62,9 +62,25 @@ pub enum MacroMode {
 }
 
 impl Profile {
+    /// The text of a profile file holding this profile. Comments in a
+    /// hand-written file are not kept.
+    pub fn to_toml(&self) -> String {
+        toml::to_string(self).expect("a profile always serializes")
+    }
+
     /// Parses and validates the text of one profile file.
     pub fn from_toml(text: &str) -> Result<Profile, ConfigError> {
         let profile: Profile = toml::from_str(text)?;
+        profile.validate()?;
+        Ok(profile)
+    }
+
+    /// The rules a single profile must follow by itself.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let profile = self;
+        if profile.name.trim().is_empty() {
+            return Err(ConfigError::Invalid("a profile needs a name".into()));
+        }
         for (label, binding) in &profile.bindings {
             match binding {
                 Binding::Key { keys } if keys.is_empty() => {
@@ -82,7 +98,7 @@ impl Profile {
                 _ => {}
             }
         }
-        Ok(profile)
+        Ok(())
     }
 }
 
@@ -248,6 +264,25 @@ mod tests {
             }
         );
         assert_eq!(profile.bindings["G9"], Binding::Disabled);
+    }
+
+    #[test]
+    fn a_profile_survives_being_written_and_read_back() {
+        let profile = Profile::from_toml(
+            r#"
+            name = "Deadlock"
+            [match]
+            window_class = ["steam_app_1422450"]
+            [bindings]
+            M4 = { type = "key", keys = ["KEY_LEFTALT", "KEY_TAB"] }
+            M5 = { type = "mouse_button", button = "BTN_MIDDLE" }
+            G7 = { type = "macro", name = "buy-combo", mode = "toggle" }
+            G8 = { type = "passthrough" }
+            "Scroll Up" = { type = "disabled" }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(Profile::from_toml(&profile.to_toml()).unwrap(), profile);
     }
 
     #[test]

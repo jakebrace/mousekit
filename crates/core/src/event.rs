@@ -7,7 +7,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::keynames::{ALIASES, CANONICAL};
 
@@ -71,13 +71,28 @@ pub struct Key(pub u16);
 impl Key {
     pub const BTN_LEFT: Key = Key(0x110);
 
+    /// One past the highest key code the kernel defines (KEY_MAX is 0x2ff).
+    const CODE_LIMIT: u16 = 0x300;
+
     /// Looks up a kernel name such as "KEY_F13" or "BTN_SIDE".
+    ///
+    /// Some codes have no kernel name. Gaming mice use several: their extra
+    /// buttons continue past BTN_TASK (0x117) into 0x118, 0x119 and so on.
+    /// Those are written by number, as "BTN_0x119" or "KEY_0x119", which is
+    /// also how they are printed.
     pub fn from_name(name: &str) -> Option<Key> {
-        CANONICAL
+        let named = CANONICAL
             .iter()
             .chain(ALIASES)
             .find(|(_, candidate)| *candidate == name)
-            .map(|(code, _)| Key(*code))
+            .map(|(code, _)| Key(*code));
+        named.or_else(|| {
+            let hex = name
+                .strip_prefix("BTN_0x")
+                .or_else(|| name.strip_prefix("KEY_0x"))?;
+            let code = u16::from_str_radix(hex, 16).ok()?;
+            (code < Key::CODE_LIMIT).then_some(Key(code))
+        })
     }
 
     /// Every key and button code the kernel has a name for.
@@ -104,6 +119,7 @@ impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.name() {
             Some(name) => f.write_str(name),
+            None if self.is_button() => write!(f, "BTN_{:#x}", self.0),
             None => write!(f, "KEY_{:#x}", self.0),
         }
     }
@@ -120,6 +136,12 @@ impl FromStr for Key {
 
     fn from_str(text: &str) -> Result<Key, String> {
         Key::from_name(text).ok_or_else(|| format!("unknown key or button name \"{text}\""))
+    }
+}
+
+impl Serialize for Key {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 
@@ -206,6 +228,12 @@ impl FromStr for Trigger {
     }
 }
 
+impl Serialize for Trigger {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 impl<'de> Deserialize<'de> for Trigger {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Trigger, D::Error> {
         let text = String::deserialize(deserializer)?;
@@ -223,6 +251,40 @@ mod tests {
         assert_eq!(Key(0x113).name(), Some("BTN_SIDE"));
         assert_eq!(Key::from_name("KEY_F13"), Some(Key(183)));
         assert_eq!(Key::from_name("KEY_NOPE"), None);
+    }
+
+    /// Found on a G502 X: a thumb button reports code 0x119, which the
+    /// kernel has no name for.
+    #[test]
+    fn codes_without_a_kernel_name_round_trip_by_number() {
+        let unnamed = Key(0x119);
+        assert_eq!(unnamed.name(), None);
+        assert_eq!(unnamed.to_string(), "BTN_0x119");
+        assert_eq!(Key::from_name("BTN_0x119"), Some(unnamed));
+        assert_eq!(Key::from_name("KEY_0x119"), Some(unnamed));
+        assert_eq!(
+            Trigger::Key(unnamed).to_string().parse(),
+            Ok(Trigger::Key(unnamed))
+        );
+        assert_eq!(Key(0x2f0).to_string(), "KEY_0x2f0");
+        assert_eq!(Key::from_name("KEY_0x2f0"), Some(Key(0x2f0)));
+        // Out of range or malformed numbers are still rejected.
+        assert_eq!(Key::from_name("KEY_0x300"), None);
+        assert_eq!(Key::from_name("BTN_0xzz"), None);
+    }
+
+    /// Every code must print as something that parses back to itself, or a
+    /// captured button could not be saved.
+    #[test]
+    fn every_possible_code_round_trips() {
+        for code in 0..Key::CODE_LIMIT {
+            let key = Key(code);
+            assert_eq!(
+                Key::from_name(&key.to_string()),
+                Some(key),
+                "code {code:#x}"
+            );
+        }
     }
 
     #[test]

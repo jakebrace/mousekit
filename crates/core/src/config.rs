@@ -4,12 +4,12 @@ use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::ConfigError;
 use crate::event::Trigger;
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
@@ -19,7 +19,7 @@ pub struct Config {
     pub devices: Vec<DeviceConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Settings {
     pub autostart: bool,
@@ -35,7 +35,7 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceConfig {
     /// Every vendor:product ID this mouse shows up as. A wireless mouse has
@@ -43,9 +43,9 @@ pub struct DeviceConfig {
     pub ids: Vec<DeviceId>,
     pub name: String,
     /// Stored for Milestone 6; nothing applies these yet.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dpi: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polling_hz: Option<u32>,
     /// Written as repeated `[[device.control]]` blocks.
     #[serde(default, rename = "control")]
@@ -53,6 +53,12 @@ pub struct DeviceConfig {
 }
 
 impl DeviceConfig {
+    /// This one device block as TOML, the form the daemon's `SaveDevice`
+    /// call takes.
+    pub fn to_toml(&self) -> String {
+        toml::to_string(self).expect("a device always serializes")
+    }
+
     pub fn control(&self, label: &str) -> Option<&Control> {
         self.controls.iter().find(|control| control.label == label)
     }
@@ -60,7 +66,7 @@ impl DeviceConfig {
 
 /// A named button or scroll direction on one mouse. Profiles refer to the
 /// label, so they survive the underlying event changing.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Control {
     pub label: String,
@@ -96,6 +102,12 @@ impl FromStr for DeviceId {
     }
 }
 
+impl Serialize for DeviceId {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 impl<'de> Deserialize<'de> for DeviceId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<DeviceId, D::Error> {
         let text = String::deserialize(deserializer)?;
@@ -111,12 +123,18 @@ impl Config {
         Ok(config)
     }
 
+    /// The text of a `config.toml` holding this config. Comments in a
+    /// hand-written file are not kept.
+    pub fn to_toml(&self) -> String {
+        toml::to_string(self).expect("a config always serializes")
+    }
+
     /// The device block that lists this ID, if any.
     pub fn device(&self, id: DeviceId) -> Option<&DeviceConfig> {
         self.devices.iter().find(|device| device.ids.contains(&id))
     }
 
-    fn validate(&self) -> Result<(), ConfigError> {
+    pub fn validate(&self) -> Result<(), ConfigError> {
         let mut seen_ids = HashSet::new();
         for device in &self.devices {
             if device.ids.is_empty() {
@@ -212,6 +230,14 @@ mod tests {
                 positive: true
             }
         );
+    }
+
+    #[test]
+    fn a_config_survives_being_written_and_read_back() {
+        let config = Config::from_toml(EXAMPLE).unwrap();
+        assert_eq!(Config::from_toml(&config.to_toml()).unwrap(), config);
+        let empty = Config::from_toml("").unwrap();
+        assert_eq!(Config::from_toml(&empty.to_toml()).unwrap(), empty);
     }
 
     #[test]

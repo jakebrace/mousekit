@@ -8,3 +8,16 @@ publish.workspace = true
 name = "mouse_profiles_gui"
 
 [dependencies]
+mouse-profiles-core = { path = "../core" }
+# Pinned exactly: iced changes its API between minor versions.
+# Software rendering only (tiny-skia): a settings window does not need the
+# GPU, and leaving wgpu out keeps the build and the binary much smaller.
+iced = { version = "=0.14.0", default-features = false, features = [
+    "tiny-skia",
+    "wayland",
+    "x11",
+    "smol",
+    "linux-theme-detection",
+] }
+# Same zbus version as the daemon. The GUI is a D-Bus client only.
+zbus = "5.19.0"

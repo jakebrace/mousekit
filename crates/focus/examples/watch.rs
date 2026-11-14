@@ -17,11 +17,15 @@ fn main() {
 
     let runner = backend.clone();
     std::thread::spawn(move || {
-        let result = runner.run(Box::new(|window| {
-            println!(
+        let result = runner.run(Box::new(|event| match event {
+            mouse_profiles_focus::FocusEvent::Focused(window) => println!(
                 "{:?}  class={:?}  exe={:?}  title={:?}",
                 window.kind, window.class, window.exe, window.title
-            );
+            ),
+            mouse_profiles_focus::FocusEvent::Windows(windows) => {
+                let classes: Vec<&str> = windows.iter().map(|w| w.class.as_str()).collect();
+                println!("open windows: {classes:?}");
+            }
         }));
         if let Err(error) = result {
             eprintln!("backend stopped: {error}");

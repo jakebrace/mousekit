@@ -75,6 +75,11 @@ impl ksni::Tray for Tray {
         ksni::Category::Hardware
     }
 
+    /// Left-clicking the icon opens the settings window.
+    fn activate(&mut self, _x: i32, _y: i32) {
+        open_settings();
+    }
+
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: "Mouse Profiles".into(),
@@ -104,6 +109,13 @@ impl ksni::Tray for Tray {
         }));
 
         vec![
+            StandardItem {
+                label: "Open settings".into(),
+                activate: Box::new(|_: &mut Tray| open_settings()),
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
             StandardItem {
                 label: format!("Profile: {}", label(&self.view.active_profile)),
                 enabled: false,
@@ -157,6 +169,24 @@ impl ksni::Tray for Tray {
             }
             .into(),
         ]
+    }
+}
+
+/// Starts the settings window as its own process (`mouse-profiles gui`), so
+/// the daemon never loads the GUI toolkit and a GUI crash cannot interrupt
+/// remapping.
+fn open_settings() {
+    let started =
+        std::env::current_exe().and_then(|exe| std::process::Command::new(exe).arg("gui").spawn());
+    match started {
+        // Wait for it in the background so it does not linger as a zombie
+        // process after its window is closed.
+        Ok(mut child) => {
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(error) => log(&format!("cannot open the settings window: {error}")),
     }
 }
 

@@ -1,5 +1,8 @@
-//! The single binary. `daemon` runs the engine; every other command is a
-//! D-Bus call to the running daemon.
+//! The single binary. `daemon` runs the engine, `gui` opens the settings
+//! window, and every other command is a D-Bus call to the running daemon.
+//!
+//! The GUI toolkit is linked in but only loaded by `gui`; the daemon never
+//! touches it, so its memory use stays small.
 
 use mouse_profiles_daemon::service;
 
@@ -7,6 +10,7 @@ const USAGE: &str = "\
 Usage: mouse-profiles <command>
 
   daemon           run the remapper (normally started at login)
+  gui              open the settings window
   status           show the active profile, recent windows and connected mice
   pause            stop remapping (the mouse behaves as if unmodified)
   resume           start remapping again
@@ -21,6 +25,7 @@ fn main() {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
         ["daemon"] => mouse_profiles_daemon::run(),
+        ["gui"] => mouse_profiles_gui::run(),
         ["--help" | "-h" | "help"] => {
             println!("{USAGE}");
             Ok(())

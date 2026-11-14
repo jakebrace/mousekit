@@ -5,15 +5,16 @@
 use std::time::{Duration, Instant};
 
 use mouse_profiles_core::event::{EV_MSC, REL_HWHEEL_HI_RES, REL_WHEEL_HI_RES};
-use mouse_profiles_core::{Decision, Event, Trigger, Window, WindowKind, decide};
+use mouse_profiles_core::{Decision, Event, Key, Trigger, Window, WindowKind, decide};
 
-use crate::{Capture, Shared, State, autostart, load, lock, log};
+use crate::{CaptureSession, Shared, State, autostart, load, lock, log};
 
 /// How many recently focused windows `status` lists.
 const RECENT_WINDOWS: usize = 6;
 
-/// How long a capture waits for a button before giving up.
-pub(crate) const CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a capture stays open with nothing pressed before it ends by
+/// itself. Every captured button restarts the clock.
+pub(crate) const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl State {
     /// Writes whatever is in `out` to the virtual device and clears it.
@@ -211,38 +212,59 @@ impl State {
         lines.join("\n")
     }
 
-    /// Starts waiting for the next button press or scroll tick. Remapping is
-    /// suspended until it arrives, so the button reports what it really is.
+    /// Starts a capture session. Until it ends, remapping is suspended and
+    /// every button pressed or scroll direction used is recorded.
     pub fn start_capture(&mut self) {
         self.release_everything();
-        self.capture = Capture::Waiting {
+        self.capture = Some(CaptureSession {
             deadline: Instant::now() + CAPTURE_TIMEOUT,
+            seen: Vec::new(),
+            unreported: Vec::new(),
+        });
+    }
+
+    /// True while a capture session is open and not overdue.
+    pub fn capturing(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|session| Instant::now() < session.deadline)
+    }
+
+    /// Hands over what has been captured since the last call. The flag says
+    /// whether the session is still open; an overdue session is closed here.
+    pub fn poll_capture(&mut self) -> (bool, Vec<Trigger>) {
+        let open = self.capturing();
+        let captured = match &mut self.capture {
+            Some(session) => std::mem::take(&mut session.unreported),
+            None => Vec::new(),
         };
-    }
-
-    /// True while a capture is waiting. Expires an overdue one.
-    pub fn capturing(&mut self) -> bool {
-        match self.capture {
-            Capture::Waiting { deadline } if Instant::now() < deadline => true,
-            Capture::Waiting { .. } => {
-                self.capture = Capture::Idle;
-                false
-            }
-            _ => false,
+        if !open {
+            self.capture = None;
         }
+        (open, captured)
     }
 
-    /// Handles one frame from a mouse while a capture is waiting: the first
-    /// press or scroll tick is recorded and swallowed, everything else is
-    /// mirrored unchanged.
+    /// Handles one frame from a mouse during a capture session. Presses and
+    /// scroll ticks are recorded and swallowed; everything else is mirrored
+    /// unchanged.
+    ///
+    /// Left click is the exception: it is never captured and always works,
+    /// so the session can be stopped with the mouse.
     pub fn capture_frame(&mut self, frame: &[Event]) {
-        let found = frame.iter().find_map(Trigger::from_event);
+        let Some(session) = &mut self.capture else {
+            return;
+        };
+        let capturable = |event: &Event| {
+            Trigger::from_event(event).filter(|trigger| *trigger != Trigger::Key(Key::BTN_LEFT))
+        };
+        let found: Vec<Trigger> = frame.iter().filter_map(capturable).collect();
+        let found_scroll = found
+            .iter()
+            .any(|trigger| matches!(trigger, Trigger::Scroll { .. }));
         for event in frame {
-            let swallow = found.is_some()
-                && (Trigger::from_event(event) == found
-                    || event.kind == EV_MSC
-                    || matches!(event.code, REL_WHEEL_HI_RES | REL_HWHEEL_HI_RES)
-                        && matches!(found, Some(Trigger::Scroll { .. })));
+            let swallow = capturable(event).is_some()
+                || !found.is_empty() && event.kind == EV_MSC
+                || found_scroll && matches!(event.code, REL_WHEEL_HI_RES | REL_HWHEEL_HI_RES);
             if !swallow {
                 self.out.push(*event);
             }
@@ -250,8 +272,12 @@ impl State {
         if !self.out.is_empty() {
             self.out.push(Event::SYN);
         }
-        if let Some(trigger) = found {
-            self.capture = Capture::Done(trigger);
+        for trigger in found {
+            session.deadline = Instant::now() + CAPTURE_TIMEOUT;
+            if !session.seen.contains(&trigger) {
+                session.seen.push(trigger);
+                session.unreported.push(trigger);
+            }
         }
     }
 }

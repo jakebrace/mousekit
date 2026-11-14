@@ -10,12 +10,9 @@ use zbus::fdo::{self, RequestNameFlags, RequestNameReply};
 use zbus::interface;
 
 use crate::actions::{self, CAPTURE_TIMEOUT};
-use crate::{Capture, Shared, instance, lock};
+use crate::{Shared, instance, lock};
 
-// Placeholders until the project's app ID is settled (see docs/PLAN.md).
-const BUS_NAME: &str = "io.github.mouseprofiles.Daemon";
-const OBJECT_PATH: &str = "/io/github/mouseprofiles/Daemon";
-const INTERFACE: &str = "io.github.mouseprofiles.Daemon1";
+use mouse_profiles_core::dbus::{BUS_NAME, INTERFACE, OBJECT_PATH};
 
 /// The bus name in use: the normal one, or a separate one for a test
 /// instance so it never collides with a daemon that is really in use.
@@ -94,32 +91,68 @@ impl Api {
         ))
     }
 
-    /// Starts waiting for the next button press or scroll tick on any
-    /// grabbed mouse. Poll for the result with `PollCapture`.
+    /// Starts a capture session: until it ends, remapping is suspended and
+    /// every button pressed on any grabbed mouse is recorded. Left click
+    /// keeps working and is not recorded. Collect results with
+    /// `PollCapture`; end it with `CancelCapture`, or leave it and it ends
+    /// after 30 seconds without a press.
     fn start_capture(&self) {
         lock(&self.shared).start_capture();
     }
 
-    /// Returns ("waiting", ""), ("done", "<event name>") once, or
-    /// ("idle", "") if no capture is running (never started, timed out, or
-    /// already collected).
-    fn poll_capture(&self) -> (String, String) {
-        let mut state = lock(&self.shared);
-        if state.capturing() {
-            return ("waiting".into(), String::new());
-        }
-        match std::mem::replace(&mut state.capture, Capture::Idle) {
-            Capture::Done(trigger) => ("done".into(), trigger.to_string()),
-            _ => ("idle".into(), String::new()),
-        }
+    /// Returns whether the session is still open, and the event names
+    /// captured since the last poll (each button is reported once per
+    /// session).
+    fn poll_capture(&self) -> (bool, Vec<String>) {
+        let (open, captured) = lock(&self.shared).poll_capture();
+        (
+            open,
+            captured.iter().map(|trigger| trigger.to_string()).collect(),
+        )
     }
 
     fn cancel_capture(&self) {
-        lock(&self.shared).capture = Capture::Idle;
+        lock(&self.shared).capture = None;
     }
 
     fn quit(&self) {
         actions::quit(&self.shared);
+    }
+
+    // --- For the settings window. Structured values travel as TOML text,
+    // --- using the same types as the config files.
+
+    /// The daemon's whole state: a `Snapshot` as TOML.
+    fn get_snapshot(&self) -> String {
+        lock(&self.shared).snapshot().to_toml()
+    }
+
+    /// Creates or replaces a profile. `original` is its current name, or
+    /// empty for a new profile; `profile` is the profile file's text.
+    fn save_profile(&self, original: &str, profile: &str) -> fdo::Result<()> {
+        lock(&self.shared)
+            .save_profile(original, profile)
+            .map_err(fdo::Error::Failed)
+    }
+
+    fn delete_profile(&self, name: &str) -> fdo::Result<()> {
+        lock(&self.shared)
+            .delete_profile(name)
+            .map_err(fdo::Error::Failed)
+    }
+
+    /// Replaces one device block; `device` is the block's TOML text.
+    fn save_device(&self, index: u32, device: &str) -> fdo::Result<()> {
+        lock(&self.shared)
+            .save_device(index as usize, device)
+            .map_err(fdo::Error::Failed)
+    }
+
+    /// Renames a control and every binding that refers to it.
+    fn rename_control(&self, index: u32, old: &str, new: &str) -> fdo::Result<()> {
+        lock(&self.shared)
+            .rename_control(index as usize, old, new)
+            .map_err(fdo::Error::Failed)
     }
 }
 
@@ -160,23 +193,28 @@ pub fn run_command(command: &str, argument: Option<&str>) -> Result<String, Stri
     }
 }
 
+/// `mouse-profiles capture`: prints the first button pressed, then stops.
 fn capture(connection: &Connection) -> Result<String, String> {
     call::<()>(connection, "StartCapture", &())?;
-    eprintln!("Press a mouse button or scroll the wheel...");
+    eprintln!("Press a mouse button other than left click, or scroll the wheel...");
     let deadline = Instant::now() + CAPTURE_TIMEOUT;
+    let mut result = Err(
+        "nothing was pressed in time (is the mouse connected? check `mouse-profiles status`)"
+            .to_string(),
+    );
     while Instant::now() < deadline {
-        let (state, value): (String, String) = call(connection, "PollCapture", &())?;
-        match state.as_str() {
-            "done" => return Ok(value),
-            "waiting" => std::thread::sleep(Duration::from_millis(30)),
-            _ => break,
+        let (open, captured): (bool, Vec<String>) = call(connection, "PollCapture", &())?;
+        if let Some(first) = captured.into_iter().next() {
+            result = Ok(first);
+            break;
         }
+        if !open {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(30));
     }
     let _ = call::<()>(connection, "CancelCapture", &());
-    Err(
-        "nothing was pressed in time (is the mouse connected? check `mouse-profiles status`)"
-            .into(),
-    )
+    result
 }
 
 fn call<R>(

@@ -297,7 +297,8 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
     expect_key(&mut output, KeyCode::KEY_F14, 0);
 
     // capture reports the button's real name and swallows that press, then
-    // remapping carries on as before.
+    // remapping carries on as before. Left click is not captured and keeps
+    // working during the session.
     let capture = daemon
         .cli(&["capture"])
         .stdout(Stdio::piped())
@@ -305,6 +306,10 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
         .spawn()
         .expect("start capture");
     sleep(Duration::from_millis(500));
+    fake.emit(&[key(KeyCode::BTN_LEFT, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::BTN_LEFT, 1);
+    fake.emit(&[key(KeyCode::BTN_LEFT, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::BTN_LEFT, 0);
     fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
     fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
     let captured = capture.wait_with_output().expect("capture finishes");
@@ -313,6 +318,81 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
     expect_key(&mut output, KeyCode::KEY_F14, 1);
     fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
     expect_key(&mut output, KeyCode::KEY_F14, 0);
+
+    // The calls the settings window uses, made here with busctl.
+    let busctl = |method: &str, signature: &str, args: &[&str]| -> String {
+        let output = Command::new("busctl")
+            .args([
+                "--user",
+                "call",
+                "io.github.mouseprofiles.Daemon.test",
+                "/io/github/mouseprofiles/Daemon",
+                "io.github.mouseprofiles.Daemon1",
+                method,
+                signature,
+            ])
+            .args(args)
+            .output()
+            .expect("run busctl");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+            + &String::from_utf8_lossy(&output.stderr)
+    };
+
+    // An open capture session records every button once, in order, and
+    // stays open until cancelled.
+    busctl("StartCapture", "", &[]);
+    for button in [KeyCode::BTN_RIGHT, KeyCode::BTN_SIDE, KeyCode::BTN_RIGHT] {
+        fake.emit(&[key(button, 1)]).unwrap();
+        fake.emit(&[key(button, 0)]).unwrap();
+    }
+    sleep(Duration::from_millis(200));
+    assert_eq!(
+        busctl("PollCapture", "", &[]).trim(),
+        "bas true 2 \"BTN_RIGHT\" \"BTN_SIDE\""
+    );
+    assert_eq!(busctl("PollCapture", "", &[]).trim(), "bas true 0");
+    busctl("CancelCapture", "", &[]);
+    assert_eq!(busctl("PollCapture", "", &[]).trim(), "bas false 0");
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 1);
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 0);
+
+    let new_profile = "name = \"Made By Gui\"\n[match]\nwindow_class = [\"gui-app\"]\n[bindings]\nM4 = { type = \"disabled\" }\n";
+    busctl("SaveProfile", "ss", &["", new_profile]);
+    let new_path = config_dir.join("profiles/made-by-gui.toml");
+    assert!(new_path.exists(), "a new profile gets its own file");
+
+    // A profile that claims another profile's app is refused, and no file
+    // is written for it.
+    let clash = "name = \"Clash\"\n[match]\nwindow_class = [\"some-game\"]\n";
+    assert!(busctl("SaveProfile", "ss", &["", clash]).contains("claimed by both"));
+    assert!(!config_dir.join("profiles/clash.toml").exists());
+
+    // Binding left click is refused too.
+    let device_with_left = "ids = [\"1209:0f01\"]\nname = \"Fake Mouse\"\n[[control]]\nlabel = \"M4\"\nevent = \"BTN_LEFT\"\n";
+    assert!(busctl("SaveDevice", "us", &["0", device_with_left]).contains("left click"));
+
+    // Renaming a control renames it in every profile, so bindings survive.
+    busctl("RenameControl", "uss", &["0", "M4", "Thumb"]);
+    assert!(
+        fs::read_to_string(config_dir.join("config.toml"))
+            .unwrap()
+            .contains("Thumb")
+    );
+    assert!(fs::read_to_string(&new_path).unwrap().contains("Thumb"));
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 1);
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 0);
+
+    let snapshot = busctl("GetSnapshot", "", &[]);
+    assert!(snapshot.contains("Made By Gui") && snapshot.contains("Thumb"));
+    assert!(snapshot.contains("connected = true"));
+
+    busctl("DeleteProfile", "s", &["Made By Gui"]);
+    assert!(!new_path.exists());
+    assert!(busctl("DeleteProfile", "s", &["Default"]).contains("cannot be deleted"));
 
     // A second daemon refuses to start while the first is running.
     let second = daemon

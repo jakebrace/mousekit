@@ -12,10 +12,14 @@ use mouse_profiles_input::VirtualMouse;
 
 /// The result of loading the config directory.
 pub struct Loaded {
+    /// The config directory everything was read from.
+    pub dir: PathBuf,
     pub config: Config,
     pub default: Profile,
     /// App-specific profiles, sorted by file name.
     pub profiles: Vec<Profile>,
+    /// The file each app profile came from, same order as `profiles`.
+    pub profile_paths: Vec<PathBuf>,
     /// Engine tables: `tables[device][0]` is the default profile for that
     /// device and `tables[device][i + 1]` is `profiles[i]` layered over it.
     tables: Vec<Vec<Arc<ResolvedProfile>>>,
@@ -100,9 +104,13 @@ pub fn load(dir: &Path) -> Result<Loaded, String> {
     };
     paths.sort();
     let mut profiles = Vec::new();
+    let mut profile_paths = Vec::new();
     for path in &paths {
         match read_profile(path) {
-            Ok(profile) => profiles.push(profile),
+            Ok(profile) => {
+                profiles.push(profile);
+                profile_paths.push(path.clone());
+            }
             // Deleted between listing and reading; nothing to load.
             Err(ReadError::Missing) => {}
             Err(ReadError::Other(message)) => return Err(message),
@@ -145,9 +153,11 @@ pub fn load(dir: &Path) -> Result<Loaded, String> {
     warnings.dedup();
 
     Ok(Loaded {
+        dir: dir.to_path_buf(),
         config,
         default,
         profiles,
+        profile_paths,
         tables,
         warnings,
     })

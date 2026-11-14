@@ -10,8 +10,17 @@ use std::path::Path;
 
 pub use mouse_profiles_core::{Window, WindowKind};
 
-/// Called with every focus change, from the backend's own thread.
-pub type OnFocus = Box<dyn Fn(Window) + Send + Sync>;
+/// What a backend reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FocusEvent {
+    /// This window just took focus.
+    Focused(Window),
+    /// The full list of open application windows, sent whenever it changes.
+    Windows(Vec<Window>),
+}
+
+/// Called with every event, from the backend's own thread.
+pub type OnFocus = Box<dyn Fn(FocusEvent) + Send + Sync>;
 
 pub trait FocusBackend: Send + Sync {
     /// Short name for logs and status, e.g. "kde".

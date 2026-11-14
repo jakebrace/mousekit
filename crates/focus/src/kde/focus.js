@@ -21,7 +21,23 @@ function kindOf(w, cls) {
     return "shell";
 }
 
+// Sends the list of open application windows, one per line, for the
+// settings window's "add from running windows" picker.
+function sendWindows() {
+    const lines = [];
+    const list = workspace.windowList();
+    for (let i = 0; i < list.length; i++) {
+        const w = list[i];
+        const cls = String(w.resourceClass);
+        if (cls === "" || kindOf(w, cls.toLowerCase()) !== "app") continue;
+        const title = String(w.caption).replace(/[\t\n\r]/g, " ");
+        lines.push(cls + "\t" + String(w.pid) + "\t" + title);
+    }
+    callDBus(SERVICE, PATH, INTERFACE, "WindowsChanged", lines.join("\n"));
+}
+
 function report(w) {
+    sendWindows();
     if (!w) {
         // Nothing focused at all, e.g. after closing the last window.
         callDBus(SERVICE, PATH, INTERFACE, "FocusChanged", "", "", "0", "shell");
@@ -33,5 +49,7 @@ function report(w) {
 }
 
 workspace.windowActivated.connect(report);
+workspace.windowAdded.connect(sendWindows);
+workspace.windowRemoved.connect(sendWindows);
 // Report the current window immediately, so the daemon never starts blind.
 report(workspace.activeWindow);
