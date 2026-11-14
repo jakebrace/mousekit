@@ -16,6 +16,7 @@
 mod actions;
 mod autostart;
 mod edit;
+mod hardware;
 pub mod load;
 mod reader;
 pub mod service;
@@ -28,7 +29,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mouse_profiles_core::{Engine, Event, Trigger, Window};
+use mouse_profiles_core::{Engine, Event, HardwareInfo, Trigger, Window};
 use mouse_profiles_focus::{FocusBackend, FocusEvent};
 use mouse_profiles_input::{Mouse, NodeInfo, VirtualMouse, list_nodes};
 
@@ -78,6 +79,13 @@ pub(crate) struct State {
     pub focus_status: String,
     pub focus_backend: Option<Arc<dyn FocusBackend>>,
     pub capture: Option<CaptureSession>,
+    /// Each connected mouse's own sensor settings, same order as the
+    /// config's devices; `None` while unknown or unsupported.
+    pub hardware: Vec<Option<HardwareInfo>>,
+    /// When to next try reading a mouse's sensor settings, and how many
+    /// tries are left, for mice whose settings are still unknown. A mouse
+    /// that was asleep at login does not answer until it wakes.
+    pub hardware_retry: Vec<Option<(Instant, u32)>>,
     /// Nodes that currently have a reader thread.
     pub active: HashSet<PathBuf>,
     /// Scratch buffer for engine output.
@@ -163,6 +171,8 @@ pub fn run() -> Result<(), String> {
         log("no focus backend; only the default profile is used unless you pick one by hand");
     }
 
+    let hardware = loaded.config.devices.iter().map(|_| None).collect();
+    let hardware_retry = loaded.config.devices.iter().map(|_| None).collect();
     let (macro_wake, macro_wakes) = mpsc::channel();
     let mut state = State {
         loaded,
@@ -177,6 +187,8 @@ pub fn run() -> Result<(), String> {
         focus_status,
         focus_backend: focus_backend.clone(),
         capture: None,
+        hardware,
+        hardware_retry,
         active: HashSet::new(),
         out: Vec::new(),
         started: Instant::now(),

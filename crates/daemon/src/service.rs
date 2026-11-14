@@ -162,6 +162,19 @@ impl Api {
             .map_err(fdo::Error::Failed)
     }
 
+    /// Sets a mouse's sensor resolution now and saves it for next time.
+    /// Blocks while the mouse is asked, usually well under a second.
+    fn set_dpi(&self, index: u32, dpi: u32) -> fdo::Result<()> {
+        crate::hardware::set(&self.shared, index as usize, Some(dpi), None)
+            .map_err(fdo::Error::Failed)
+    }
+
+    /// Sets a mouse's report rate in Hz now and saves it for next time.
+    fn set_polling_hz(&self, index: u32, hz: u32) -> fdo::Result<()> {
+        crate::hardware::set(&self.shared, index as usize, None, Some(hz))
+            .map_err(fdo::Error::Failed)
+    }
+
     /// Renames a control and every binding that refers to it.
     fn rename_control(&self, index: u32, old: &str, new: &str) -> fdo::Result<()> {
         lock(&self.shared)

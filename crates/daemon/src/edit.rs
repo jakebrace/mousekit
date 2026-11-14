@@ -42,6 +42,12 @@ impl State {
                 .map(|device| DeviceSnapshot {
                     connected: device.ids.iter().any(|id| connected_ids.contains(id)),
                     config: device.clone(),
+                    hardware: None,
+                })
+                .zip(&self.hardware)
+                .map(|(mut device, hardware)| {
+                    device.hardware = hardware.clone();
+                    device
                 })
                 .collect(),
             windows: self
@@ -139,6 +145,29 @@ impl State {
             &self.loaded.macros,
         )?;
 
+        write_file(&self.loaded.dir.join("config.toml"), &config.to_toml())?;
+        self.reload().map(|_| ())
+    }
+
+    /// Records a mouse's DPI and/or report rate in `config.toml`, so they
+    /// are applied again whenever it connects.
+    pub fn save_hardware_settings(
+        &mut self,
+        index: usize,
+        dpi: Option<u32>,
+        polling_hz: Option<u32>,
+    ) -> Result<(), String> {
+        let mut config = self.loaded.config.clone();
+        let device = config
+            .devices
+            .get_mut(index)
+            .ok_or_else(|| format!("there is no device number {index}"))?;
+        if let Some(dpi) = dpi {
+            device.dpi = Some(dpi);
+        }
+        if let Some(hz) = polling_hz {
+            device.polling_hz = Some(hz);
+        }
         write_file(&self.loaded.dir.join("config.toml"), &config.to_toml())?;
         self.reload().map(|_| ())
     }

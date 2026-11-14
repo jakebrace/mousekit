@@ -8,3 +8,6 @@ publish.workspace = true
 name = "mouse_profiles_hw"
 
 [dependencies]
+mouse-profiles-core = { path = "../core" }
+# For poll(): waiting for a reply from the mouse with a timeout.
+rustix = { version = "1.1.6", features = ["event"] }

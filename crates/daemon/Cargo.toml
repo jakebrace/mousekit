@@ -11,6 +11,7 @@ name = "mouse_profiles_daemon"
 mouse-profiles-core = { path = "../core" }
 mouse-profiles-input = { path = "../input" }
 mouse-profiles-focus = { path = "../focus" }
+mouse-profiles-hw = { path = "../hw" }
 toml = "1.2.1"
 # Same zbus major version as ksni uses, so the binary carries one copy.
 zbus = "5.19.0"

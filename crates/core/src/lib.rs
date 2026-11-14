@@ -39,4 +39,4 @@ pub use event::{Event, Key, ScrollAxis, Trigger};
 pub use focus::{Decision, Window, WindowKind, check_profiles, decide};
 pub use macros::{Macro, Step, check_macros};
 pub use profile::{Action, Binding, MacroMode, Profile, ResolvedProfile, resolve};
-pub use snapshot::{DeviceSnapshot, Snapshot, WindowSummary};
+pub use snapshot::{DeviceSnapshot, HardwareInfo, Snapshot, WindowSummary};

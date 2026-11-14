@@ -244,6 +244,7 @@ fn device_page<'a>(app: &'a App, device: &'a DeviceSnapshot) -> Element<'a, Mess
     }
 
     page = page.push(space().height(8)).push(heading("Add buttons"));
+    let sensor = sensor_section(app, device);
     let mut capture = column![].spacing(6);
     if app.capturing {
         capture = capture
@@ -278,7 +279,93 @@ fn device_page<'a>(app: &'a App, device: &'a DeviceSnapshot) -> Element<'a, Mess
     for line in &app.capture_log {
         capture = capture.push(text(line).size(14));
     }
-    page.push(capture).into()
+    page.push(capture)
+        .push(space().height(8))
+        .push(sensor)
+        .into()
+}
+
+/// One entry in the report rate dropdown.
+#[derive(Debug, Clone, PartialEq)]
+struct RateOption(u32);
+
+impl fmt::Display for RateOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} Hz", self.0)
+    }
+}
+
+/// DPI and report rate, which live in the mouse itself.
+fn sensor_section<'a>(app: &'a App, device: &'a DeviceSnapshot) -> Element<'a, Message> {
+    let mut section = column![heading("Sensor")].spacing(8);
+    let Some(hardware) = &device.hardware else {
+        return section
+            .push(hint(if device.connected {
+                "DPI and report rate cannot be read from this mouse. Only some Logitech mice \
+                 are supported so far."
+            } else {
+                "Connect the mouse to see its DPI and report rate."
+            }))
+            .into();
+    };
+
+    let typed = app.dpi_draft.trim().parse::<u32>().ok();
+    let mut dpi_row = row![
+        text(format!("DPI: {}", hardware.dpi)).width(LABEL_WIDTH),
+        text_input("New DPI", &app.dpi_draft)
+            .on_input(Message::DpiDraftChanged)
+            .on_submit(Message::ApplyDpiDraft)
+            .width(110),
+        button("Apply").on_press_maybe(typed.map(|_| Message::ApplyDpiDraft)),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+    for preset in [400, 800, 1600, 3200] {
+        if hardware.dpi_values.contains(&preset) {
+            dpi_row = dpi_row.push(
+                button(text(preset.to_string()))
+                    .style(if preset == hardware.dpi {
+                        button::primary
+                    } else {
+                        button::secondary
+                    })
+                    .on_press(Message::SetDpi(preset)),
+            );
+        }
+    }
+    section = section.push(dpi_row);
+    if let (Some(low), Some(high)) = (hardware.dpi_values.first(), hardware.dpi_values.last()) {
+        section = section.push(hint(format!(
+            "This sensor accepts {low} to {high}. A typed value is rounded to the nearest \
+             one it supports."
+        )));
+    }
+
+    if !hardware.polling_values.is_empty() {
+        let options: Vec<RateOption> = hardware
+            .polling_values
+            .iter()
+            .rev()
+            .map(|hz| RateOption(*hz))
+            .collect();
+        section = section.push(
+            row![
+                text("Report rate").width(LABEL_WIDTH),
+                pick_list(options, Some(RateOption(hardware.polling_hz)), |option| {
+                    Message::SetPollingHz(option.0)
+                }),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+    }
+    section
+        .push(hint(
+            "These are stored in the config and re-applied each time the mouse connects. \
+             Setting either one takes the mouse out of its onboard-profile mode. If another \
+             tool such as Solaar also manages this mouse, its settings may override these.",
+        ))
+        .into()
 }
 
 // --------------------------------------------------------------- profile page

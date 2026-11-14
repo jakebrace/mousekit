@@ -11,6 +11,7 @@ pub(crate) fn run(shared: Shared, device_index: usize, node: NodeInfo, mut mouse
     match mouse.grab_when_released() {
         Ok(()) => {
             log(&format!("grabbed {label} at {}", node.path.display()));
+            crate::hardware::start_sync(&shared, device_index);
             forward(&shared, device_index, &mut mouse);
             log(&format!("{label} disconnected"));
         }
@@ -25,6 +26,12 @@ pub(crate) fn run(shared: Shared, device_index: usize, node: NodeInfo, mut mouse
     state.engines[device_index].release_all(&mut state.out);
     state.flush();
     state.active.remove(&node.path);
+    if let Some(slot) = state.hardware.get_mut(device_index) {
+        *slot = None;
+    }
+    if let Some(retry) = state.hardware_retry.get_mut(device_index) {
+        *retry = None;
+    }
 }
 
 /// Runs until reading fails, which means the mouse went away.
@@ -40,6 +47,12 @@ fn forward(shared: &Shared, device_index: usize, mouse: &mut Mouse) {
         let mut guard = lock(shared);
         // Reborrow so the fields can be borrowed separately below.
         let state = &mut *guard;
+        // An event means the mouse is awake, which is the moment a failed
+        // read of its sensor settings is worth trying again.
+        if crate::hardware::retry_is_due(state, device_index) {
+            let retry_state = shared.clone();
+            std::thread::spawn(move || crate::hardware::sync(&retry_state, device_index));
+        }
         match kind {
             Frame::Complete if frame.is_empty() => continue,
             Frame::Complete if state.capturing() => state.capture_frame(&frame),

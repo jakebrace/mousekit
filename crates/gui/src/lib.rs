@@ -76,6 +76,10 @@ pub(crate) enum Message {
     StartCapture,
     StopCapture,
     MoveControl(String, Direction),
+    DpiDraftChanged(String),
+    ApplyDpiDraft,
+    SetDpi(u32),
+    SetPollingHz(u32),
     BeginRename(String),
     RenameChanged(String),
     CommitRename,
@@ -148,6 +152,9 @@ pub(crate) struct App {
     /// Control being renamed on the device page: (current label, new text).
     pub rename: Option<(String, String)>,
 
+    /// Text being typed into the DPI box on the device page.
+    pub dpi_draft: String,
+
     pub new_profile_name: String,
     pub profile_name_draft: String,
     pub confirm_delete: bool,
@@ -175,6 +182,7 @@ impl App {
             capturing: false,
             capture_log: Vec::new(),
             rename: None,
+            dpi_draft: String::new(),
             new_profile_name: String::new(),
             profile_name_draft: String::new(),
             confirm_delete: false,
@@ -243,6 +251,7 @@ impl App {
         self.show_window_picker = false;
         self.class_draft.clear();
         self.editing_keys = None;
+        self.dpi_draft.clear();
         self.recording = None;
         self.delay_drafts.clear();
         self.delay_all_draft.clear();
@@ -423,6 +432,34 @@ impl App {
                 }
             }
             Message::StopCapture => self.stop_capture(),
+            Message::DpiDraftChanged(text) => self.dpi_draft = text,
+            Message::ApplyDpiDraft => {
+                // Snap what was typed to the nearest value the sensor has.
+                let wanted = self.dpi_draft.trim().parse::<u32>().ok();
+                let nearest = match (&self.page, &self.snapshot, wanted) {
+                    (Page::Device(index), Some(snapshot), Some(wanted)) => snapshot
+                        .devices
+                        .get(*index)
+                        .and_then(|device| device.hardware.as_ref())
+                        .and_then(|hardware| hardware.nearest_dpi(wanted)),
+                    _ => None,
+                };
+                if let Some(dpi) = nearest {
+                    return self.update(Message::SetDpi(dpi));
+                }
+            }
+            Message::SetDpi(dpi) => {
+                if let Page::Device(index) = self.page
+                    && self.act(|client| client.set_dpi(index, dpi))
+                {
+                    self.dpi_draft.clear();
+                }
+            }
+            Message::SetPollingHz(hz) => {
+                if let Page::Device(index) = self.page {
+                    self.act(|client| client.set_polling_hz(index, hz));
+                }
+            }
             Message::MoveControl(label, direction) => {
                 if let Page::Device(index) = self.page
                     && let Some(mut device) = self.device(index)

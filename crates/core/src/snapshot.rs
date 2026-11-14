@@ -36,6 +36,33 @@ pub struct Snapshot {
 pub struct DeviceSnapshot {
     pub connected: bool,
     pub config: DeviceConfig,
+    /// The mouse's own sensor settings, when it is connected and a hardware
+    /// backend can talk to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardware: Option<HardwareInfo>,
+}
+
+/// Settings that live in the mouse itself rather than in the remapper.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct HardwareInfo {
+    /// Current sensor resolution.
+    pub dpi: u32,
+    /// Every resolution the sensor accepts, ascending.
+    pub dpi_values: Vec<u32>,
+    /// Current report rate in reports per second.
+    pub polling_hz: u32,
+    /// Every report rate the mouse accepts, ascending.
+    pub polling_values: Vec<u32>,
+}
+
+impl HardwareInfo {
+    /// The accepted resolution closest to `wanted`.
+    pub fn nearest_dpi(&self, wanted: u32) -> Option<u32> {
+        self.dpi_values
+            .iter()
+            .copied()
+            .min_by_key(|value| value.abs_diff(wanted))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -90,6 +117,12 @@ mod tests {
                 .map(|config| DeviceSnapshot {
                     connected: true,
                     config,
+                    hardware: Some(HardwareInfo {
+                        dpi: 1600,
+                        dpi_values: vec![800, 1600, 3200],
+                        polling_hz: 1000,
+                        polling_values: vec![125, 250, 500, 1000],
+                    }),
                 })
                 .collect(),
             windows: vec![WindowSummary {
@@ -99,6 +132,10 @@ mod tests {
             }],
         };
         assert_eq!(Snapshot::from_toml(&snapshot.to_toml()).unwrap(), snapshot);
+
+        let hardware = snapshot.devices[0].hardware.as_ref().unwrap();
+        assert_eq!(hardware.nearest_dpi(1500), Some(1600));
+        assert_eq!(hardware.nearest_dpi(99_999), Some(3200));
 
         let empty = Snapshot {
             profiles: Vec::new(),

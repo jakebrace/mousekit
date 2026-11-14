@@ -86,6 +86,14 @@ impl Client {
         self.call("SaveDevice", &(index as u32, device.to_toml()))
     }
 
+    pub fn set_dpi(&self, index: usize, dpi: u32) -> Result<(), String> {
+        self.call("SetDpi", &(index as u32, dpi))
+    }
+
+    pub fn set_polling_hz(&self, index: usize, hz: u32) -> Result<(), String> {
+        self.call("SetPollingHz", &(index as u32, hz))
+    }
+
     pub fn rename_control(&self, index: usize, old: &str, new: &str) -> Result<(), String> {
         self.call("RenameControl", &(index as u32, old, new))
     }
