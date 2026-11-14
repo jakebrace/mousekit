@@ -4,24 +4,30 @@
 //! - the main thread watches for configured mice appearing ([`run`]);
 //! - one reader thread per grabbed mouse node pushes its events through the
 //!   engine and out of the virtual device (`reader`);
-//! - one thread answers `pause`, `status` and friends on a local socket
-//!   ([`control`]). Milestone 3 replaces that socket with D-Bus;
-//! - one thread runs the focus backend, which calls [`on_focus`] whenever
-//!   the focused window changes.
+//! - one thread runs the focus backend, which calls `on_focus` whenever the
+//!   focused window changes;
+//! - the D-Bus library answers the control interface ([`service`]) on its
+//!   own thread, and the tray library does the same for the tray icon.
 //!
-//! They share one [`State`] behind a mutex.
+//! They share one [`State`] behind a mutex. Everything that changes the
+//! state lives in `actions`, so the tray, the D-Bus interface and the focus
+//! backend all go through the same code.
 
-pub mod control;
+mod actions;
+mod autostart;
 pub mod load;
 mod reader;
+pub mod service;
+mod tray;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use mouse_profiles_core::{Decision, Engine, Event, Window, WindowKind, decide};
+use mouse_profiles_core::{Engine, Event, Trigger, Window};
 use mouse_profiles_focus::FocusBackend;
 use mouse_profiles_input::{Mouse, NodeInfo, VirtualMouse, list_nodes};
 
@@ -31,8 +37,20 @@ use crate::load::Loaded;
 /// costs nothing measurable; a udev monitor can replace it later.
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 
-/// How many recently focused windows `status` lists.
-const RECENT_WINDOWS: usize = 6;
+/// How long to wait before trying a failed focus backend again. At login the
+/// daemon can start before the window manager is ready.
+const FOCUS_RETRY: Duration = Duration::from_secs(5);
+
+/// Where a button capture stands.
+pub(crate) enum Capture {
+    Idle,
+    /// Waiting for the next press or scroll tick. Gives up at the deadline,
+    /// so a client that vanishes cannot leave remapping suspended.
+    Waiting {
+        deadline: Instant,
+    },
+    Done(Trigger),
+}
 
 /// Everything the threads share.
 pub(crate) struct State {
@@ -41,8 +59,12 @@ pub(crate) struct State {
     pub engines: Vec<Engine>,
     pub output: VirtualMouse,
     pub paused: bool,
-    /// The active app-specific profile, as an index into `loaded.profiles`;
-    /// `None` means the default profile.
+    /// The profile the focused window calls for: an index into
+    /// `loaded.profiles`, or `None` for the default profile.
+    pub auto_profile: Option<usize>,
+    /// A profile forced from the tray or CLI; `None` means automatic.
+    pub override_profile: Option<Option<usize>>,
+    /// The profile the engines are using right now.
     pub active_profile: Option<usize>,
     /// The most recently focused app windows, newest first, one per window
     /// class. `status` lists them so you can look up a class for a profile.
@@ -50,10 +72,13 @@ pub(crate) struct State {
     /// "kde", or why focus switching is off.
     pub focus_status: String,
     pub focus_backend: Option<Arc<dyn FocusBackend>>,
+    pub capture: Capture,
     /// Nodes that currently have a reader thread.
     pub active: HashSet<PathBuf>,
     /// Scratch buffer for engine output.
     pub out: Vec<Event>,
+    /// Poked whenever something the tray shows has changed.
+    pub tray_refresh: Option<Sender<()>>,
 }
 
 pub(crate) type Shared = Arc<Mutex<State>>;
@@ -68,40 +93,17 @@ pub(crate) fn lock(shared: &Shared) -> MutexGuard<'_, State> {
     })
 }
 
-impl State {
-    /// Writes whatever is in `out` to the virtual device and clears it.
-    /// If the virtual device stops accepting writes there is nothing useful
-    /// left to do, so exit and let the kernel release the grab.
-    pub fn flush(&mut self) {
-        if let Err(error) = self.output.emit(&self.out) {
-            log(&format!(
-                "cannot write to the virtual device: {error}; exiting"
-            ));
-            std::process::exit(1);
-        }
-        self.out.clear();
-    }
-
-    /// Points every engine at the tables for `active`. Buttons held right
-    /// now keep what they emitted; the engine guarantees that.
-    pub fn apply_profile(&mut self, active: Option<usize>) {
-        self.active_profile = active;
-        for (device, engine) in self.engines.iter_mut().enumerate() {
-            engine.set_profile(self.loaded.table(device, active));
-        }
-    }
-
-    /// Lets go of every key any engine is holding down.
-    pub fn release_everything(&mut self) {
-        for engine in &mut self.engines {
-            engine.release_all(&mut self.out);
-        }
-        self.flush();
-    }
-}
-
 pub(crate) fn log(message: &str) {
     eprintln!("mouse-profiles: {message}");
+}
+
+/// Set by tests (`MOUSE_PROFILES_INSTANCE=test`) to run a second, isolated
+/// daemon: its own bus name and virtual device, and no tray, focus backend
+/// or autostart file. Never set in normal use.
+pub(crate) fn instance() -> Option<String> {
+    std::env::var("MOUSE_PROFILES_INSTANCE")
+        .ok()
+        .filter(|name| !name.is_empty())
 }
 
 /// Runs the daemon. Returns only on a startup error; after that it runs
@@ -114,14 +116,15 @@ pub fn run() -> Result<(), String> {
         log(&format!("warning: {warning}"));
     }
 
-    // Claim the control socket before touching any device, so a second
-    // daemon stops here instead of fighting the first one for the mouse.
-    let listener = control::bind()?;
+    // Claim the bus name before touching any device, so a second daemon
+    // stops here instead of fighting the first one for the mouse.
+    let connection = service::claim_name()?;
 
-    // Tests give their daemon's device another name so they can never pick
-    // up (and grab) the device of a daemon that is really in use.
-    let output_name =
-        std::env::var("MOUSE_PROFILES_VIRTUAL_NAME").unwrap_or(VirtualMouse::NAME.to_string());
+    let isolated = instance();
+    let output_name = match &isolated {
+        Some(name) => format!("{} ({name})", VirtualMouse::NAME),
+        None => VirtualMouse::NAME.to_string(),
+    };
     let output = VirtualMouse::create(&output_name).map_err(|error| {
         format!(
             "cannot create the virtual device: {error}\n\
@@ -139,14 +142,16 @@ pub fn run() -> Result<(), String> {
         log(&format!("watching for \"{}\"", device.name));
     }
 
-    let focus_backend: Option<Arc<dyn FocusBackend>> =
-        mouse_profiles_focus::detect().map(Arc::from);
+    let focus_backend: Option<Arc<dyn FocusBackend>> = match isolated {
+        Some(_) => None,
+        None => mouse_profiles_focus::detect().map(Arc::from),
+    };
     let focus_status = match &focus_backend {
         Some(backend) => backend.name().to_string(),
         None => "off (no backend for this desktop)".to_string(),
     };
     if focus_backend.is_none() {
-        log("no focus backend for this desktop; only the default profile is used");
+        log("no focus backend; only the default profile is used unless you pick one by hand");
     }
 
     let mut state = State {
@@ -154,58 +159,63 @@ pub fn run() -> Result<(), String> {
         engines,
         output,
         paused: false,
+        auto_profile: None,
+        override_profile: None,
         active_profile: None,
         recent: Vec::new(),
         focus_status,
         focus_backend: focus_backend.clone(),
+        capture: Capture::Idle,
         active: HashSet::new(),
         out: Vec::new(),
+        tray_refresh: None,
     };
-    state.apply_profile(None);
+    state.apply_profile();
+    if isolated.is_none() {
+        state.sync_autostart();
+    }
     let shared: Shared = Arc::new(Mutex::new(state));
 
+    service::serve(&connection, shared.clone())?;
+    if isolated.is_none() {
+        tray::start(shared.clone());
+    }
     if let Some(backend) = focus_backend {
         let focus_state = shared.clone();
-        thread::spawn(move || {
-            let callback_state = focus_state.clone();
-            let result = backend.run(Box::new(move |window| on_focus(&callback_state, window)));
-            // run() only returns when the backend cannot work.
-            let reason = result.err().unwrap_or_else(|| "backend stopped".into());
-            log(&format!(
-                "focus switching is off: {reason}; staying on the default profile"
-            ));
-            let mut state = lock(&focus_state);
-            state.focus_status = format!("off ({reason})");
-            state.apply_profile(None);
-        });
+        thread::spawn(move || run_focus_backend(backend, focus_state));
     }
-
-    let control_state = shared.clone();
-    thread::spawn(move || control::serve(listener, control_state));
 
     watch_for_mice(shared)
 }
 
-/// Called by the focus backend for every focus change.
-fn on_focus(shared: &Shared, window: Window) {
-    let mut state = lock(shared);
-    let wanted = match decide(&state.loaded.profiles, &window) {
-        Decision::Keep => state.active_profile,
-        Decision::Default => None,
-        Decision::Profile(index) => Some(index),
-    };
-    if wanted != state.active_profile {
-        state.apply_profile(wanted);
-        log(&format!(
-            "profile: {} (window class \"{}\")",
-            state.loaded.profile_name(wanted),
-            window.class
-        ));
-    }
-    if window.kind == WindowKind::App {
-        state.recent.retain(|seen| seen.class != window.class);
-        state.recent.insert(0, window);
-        state.recent.truncate(RECENT_WINDOWS);
+/// Keeps the focus backend running, retrying while it cannot start.
+fn run_focus_backend(backend: Arc<dyn FocusBackend>, shared: Shared) {
+    let mut last_reason = String::new();
+    loop {
+        {
+            let mut state = lock(&shared);
+            state.focus_status = backend.name().to_string();
+        }
+        let callback_state = shared.clone();
+        let result = backend.run(Box::new(move |window| {
+            lock(&callback_state).window_focused(window);
+        }));
+        // run() only returns when the backend cannot work.
+        let reason = result.err().unwrap_or_else(|| "backend stopped".into());
+        if reason != last_reason {
+            log(&format!(
+                "focus switching is off: {reason}; retrying every {} s",
+                FOCUS_RETRY.as_secs()
+            ));
+            last_reason = reason.clone();
+        }
+        {
+            let mut state = lock(&shared);
+            state.focus_status = format!("off ({reason})");
+            state.auto_profile = None;
+            state.apply_profile();
+        }
+        thread::sleep(FOCUS_RETRY);
     }
 }
 
@@ -213,8 +223,8 @@ fn on_focus(shared: &Shared, window: Window) {
 /// node that does not have one. Covers startup, replugging, and a wireless
 /// mouse waking up, all the same way.
 fn watch_for_mice(shared: Shared) -> ! {
-    // Remember the last error per node so a persistent problem (no udev
-    // rule) is logged once, not every second.
+    // Remember the last error so a persistent problem (no udev rule) is
+    // logged once, not every second.
     let mut last_error: Option<(PathBuf, String)> = None;
     loop {
         match list_nodes() {

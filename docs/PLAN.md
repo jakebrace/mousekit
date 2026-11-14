@@ -342,7 +342,7 @@ Recorded Nov 13, 2026. All three spikes ran on the target machine (Plasma 6.8.2 
 | Onboard profiles | Solaar shows the mouse in host mode with onboard profiles disabled, so bindings stored in onboard memory are inactive while Solaar manages it. | Contradicts the "already bound in onboard memory" adjustment unless every button still emits its own event. Re-check if a button turns out silent or duplicated. |
 | Button diversion | The mouse lists no reprogrammable-controls feature (0x1B04). It has Mouse Button Spy (0x8110) instead. | Hurdle 3's claim that HID++ can divert silent buttons is unproven for this mouse. Investigate in Milestone 6. |
 | F13 as a spare key | With the default keyboard layout, F13 reaches games as the media key `XF86Tools`, and Deadlock registers nothing. Numpad keys (`KEY_KP7`) bind in Deadlock. KDE's layout option "Use F13-F24 as usual function keys" (`fkeys:basic_13-24`) is now enabled on this machine; whether Deadlock then accepts F13 is untested. | Suggest numpad keys as the default spare keys. The GUI's preset list should warn about F13-F24 unless the layout option is on. |
-| zbus | Current `zbus` is 6.2.1; version 6 removed the blocking API. Synchronous code wraps calls in `zbus::block_on`. | The engine stays synchronous as planned, but D-Bus code is written as async functions. |
+| zbus | `zbus` 6 (released Oct 2026) removed the blocking API. The tray crate `ksni` 0.3.7 still depends on `zbus` 5. | The project uses `zbus` 5.19 everywhere, with its blocking API, so the daemon carries one copy of the library and stays synchronous. Move to 6 when `ksni` does. |
 
 ## Open questions
 

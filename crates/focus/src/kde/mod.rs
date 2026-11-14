@@ -6,14 +6,15 @@
 
 use std::time::Duration;
 
-use zbus::export::ordered_stream::OrderedStreamExt;
-use zbus::{Connection, connection, fdo, interface};
+use zbus::blocking::{Connection, connection, fdo};
+use zbus::interface;
 
 use crate::{FocusBackend, OnFocus, Window, WindowKind, exe_name};
 
-/// Our name on the session bus. Must match SERVICE in focus.js. The name is
-/// a placeholder until the project's app ID is settled.
-const BUS_NAME: &str = "io.github.mouseprofiles.Daemon";
+/// This backend's own name on the session bus, separate from the daemon's
+/// control interface. Must match SERVICE in focus.js. A placeholder until
+/// the project's app ID is settled.
+const BUS_NAME: &str = "io.github.mouseprofiles.FocusListener";
 const OBJECT_PATH: &str = "/Focus";
 /// The name KWin knows the script by, used to unload a stale copy.
 const SCRIPT_NAME: &str = "mouse-profiles-focus";
@@ -33,16 +34,15 @@ impl FocusBackend for Kde {
     }
 
     fn run(&self, on_focus: OnFocus) -> Result<(), String> {
-        zbus::block_on(run(on_focus))
+        run(on_focus)
     }
 
     fn cleanup(&self) {
         // Best effort: a script left behind only calls a service that is no
         // longer there, and the next start unloads it anyway.
-        let _ = zbus::block_on(async {
-            let conn = Connection::session().await?;
-            unload_script(&conn).await
-        });
+        if let Ok(conn) = Connection::session() {
+            let _ = unload_script(&conn);
+        }
     }
 }
 
@@ -70,28 +70,25 @@ impl Listener {
     }
 }
 
-async fn run(on_focus: OnFocus) -> Result<(), String> {
+fn run(on_focus: OnFocus) -> Result<(), String> {
     // Claim the bus name and start answering before loading the script, so
     // its immediate report of the current window has somewhere to land.
     let conn = connection::Builder::session()
-        .name(BUS_NAME)
-        .serve_at(OBJECT_PATH, Listener { on_focus })
-        .build()
-        .await
-        .map_err(|e| format!("cannot set up the D-Bus service: {e}"))?;
+        .and_then(|builder| builder.name(BUS_NAME))
+        .and_then(|builder| builder.serve_at(OBJECT_PATH, Listener { on_focus }))
+        .and_then(|builder| builder.build())
+        .map_err(|e| format!("cannot set up the focus listener on D-Bus: {e}"))?;
 
-    load_script(&conn).await?;
+    load_script(&conn)?;
 
     // A script loaded over D-Bus dies with KWin. Watch for KWin coming back
     // (after a crash or `kwin_wayland --replace`) and load it again.
-    let dbus = fdo::DBusProxy::new(&conn)
-        .await
-        .map_err(|e| format!("cannot watch the session bus: {e}"))?;
-    let mut owner_changes = dbus
+    let dbus =
+        fdo::DBusProxy::new(&conn).map_err(|e| format!("cannot watch the session bus: {e}"))?;
+    let owner_changes = dbus
         .receive_name_owner_changed_with_args(&[(0, KWIN)])
-        .await
         .map_err(|e| format!("cannot watch for KWin restarts: {e}"))?;
-    while let Some(signal) = owner_changes.next().await {
+    for signal in owner_changes {
         let kwin_is_back = signal.args().is_ok_and(|args| args.new_owner().is_some());
         if !kwin_is_back {
             continue;
@@ -100,28 +97,24 @@ async fn run(on_focus: OnFocus) -> Result<(), String> {
         let mut result = Err("not tried".to_string());
         for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(500));
-            result = load_script(&conn).await;
+            result = load_script(&conn);
             if result.is_ok() {
                 break;
             }
         }
         match result {
             Ok(()) => eprintln!("mouse-profiles: KWin restarted; focus script reloaded"),
-            Err(error) => {
-                eprintln!(
-                    "mouse-profiles: KWin restarted but the focus script did not reload: {error}"
-                )
-            }
+            Err(error) => eprintln!(
+                "mouse-profiles: KWin restarted but the focus script did not reload: {error}"
+            ),
         }
     }
     Err("lost the connection to the session bus".into())
 }
 
 /// Unloads any stale copy of the script, then loads and starts a fresh one.
-async fn load_script(conn: &Connection) -> Result<(), String> {
-    unload_script(conn)
-        .await
-        .map_err(|e| format!("cannot reach KWin's scripting interface: {e}"))?;
+fn load_script(conn: &Connection) -> Result<(), String> {
+    unload_script(conn).map_err(|e| format!("cannot reach KWin's scripting interface: {e}"))?;
 
     let runtime_dir =
         std::env::var("XDG_RUNTIME_DIR").map_err(|_| "XDG_RUNTIME_DIR is not set".to_string())?;
@@ -137,7 +130,6 @@ async fn load_script(conn: &Connection) -> Result<(), String> {
             "loadScript",
             &(script_path.as_str(), SCRIPT_NAME),
         )
-        .await
         .map_err(|e| format!("KWin refused to load the focus script: {e}"))?;
     let script_id: i32 = reply
         .body()
@@ -157,21 +149,18 @@ async fn load_script(conn: &Connection) -> Result<(), String> {
         "run",
         &(),
     )
-    .await
     .map_err(|e| format!("KWin loaded the focus script but could not run it: {e}"))?;
     Ok(())
 }
 
 /// Asks KWin to unload our script. Returns whether a copy was loaded.
-async fn unload_script(conn: &Connection) -> zbus::Result<bool> {
-    let reply = conn
-        .call_method(
-            Some(KWIN),
-            SCRIPTING_PATH,
-            Some(SCRIPTING_INTERFACE),
-            "unloadScript",
-            &(SCRIPT_NAME,),
-        )
-        .await?;
+fn unload_script(conn: &Connection) -> zbus::Result<bool> {
+    let reply = conn.call_method(
+        Some(KWIN),
+        SCRIPTING_PATH,
+        Some(SCRIPTING_INTERFACE),
+        "unloadScript",
+        &(SCRIPT_NAME,),
+    )?;
     reply.body().deserialize()
 }

@@ -2,7 +2,7 @@
 // focus change. Everything is sent as a string so the D-Bus types never
 // depend on how KWin converts JavaScript numbers.
 
-const SERVICE = "io.github.mouseprofiles.Daemon";
+const SERVICE = "io.github.mouseprofiles.FocusListener";
 const PATH = "/Focus";
 const INTERFACE = "io.github.mouseprofiles.Focus";
 

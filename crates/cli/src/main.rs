@@ -1,29 +1,32 @@
 //! The single binary. `daemon` runs the engine; every other command is a
-//! one-line message to the running daemon.
+//! D-Bus call to the running daemon.
 
-use mouse_profiles_daemon::control;
+use mouse_profiles_daemon::service;
 
 const USAGE: &str = "\
 Usage: mouse-profiles <command>
 
-  daemon   run the remapper in the foreground
-  status   show whether remapping is active and which mice are connected
-  pause    stop remapping (the mouse behaves as if unmodified)
-  resume   start remapping again
-  toggle   pause if active, resume if paused (bind this to a keyboard shortcut)
-  reload   re-read the config files
-  quit     stop the daemon";
+  daemon           run the remapper (normally started at login)
+  status           show the active profile, recent windows and connected mice
+  pause            stop remapping (the mouse behaves as if unmodified)
+  resume           start remapping again
+  toggle           pause if active, resume if paused (bind this to a keyboard shortcut)
+  profile <name>   force a profile; `profile auto` follows the focused window again
+  capture          print the event name of the next mouse button you press
+  reload           re-read the config files
+  quit             stop the daemon";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
-        [command] if command == "daemon" => mouse_profiles_daemon::run(),
-        [command] if control::COMMANDS.contains(&command.as_str()) => {
-            control::send(command).map(|reply| println!("{reply}"))
-        }
-        [flag] if flag == "--help" || flag == "-h" || flag == "help" => {
+        ["daemon"] => mouse_profiles_daemon::run(),
+        ["--help" | "-h" | "help"] => {
             println!("{USAGE}");
             Ok(())
+        }
+        [command, rest @ ..] if service::COMMANDS.contains(command) && rest.len() <= 1 => {
+            service::run_command(command, rest.first().copied()).map(|reply| println!("{reply}"))
         }
         _ => Err(USAGE.to_string()),
     };

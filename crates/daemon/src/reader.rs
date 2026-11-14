@@ -42,6 +42,7 @@ fn forward(shared: &Shared, device_index: usize, mouse: &mut Mouse) {
         let state = &mut *guard;
         match kind {
             Frame::Complete if frame.is_empty() => continue,
+            Frame::Complete if state.capturing() => state.capture_frame(&frame),
             Frame::Complete if state.paused => {
                 // Paused: mirror the mouse exactly.
                 state.out.extend_from_slice(&frame);

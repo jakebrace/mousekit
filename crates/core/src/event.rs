@@ -148,6 +148,26 @@ pub enum Trigger {
     Scroll { axis: ScrollAxis, positive: bool },
 }
 
+impl Trigger {
+    /// The trigger an event fires, if any: a button or key going down, or a
+    /// whole tick of a scroll wheel. Releases, repeats, pointer motion and
+    /// the high-resolution scroll stream fire nothing.
+    pub fn from_event(event: &Event) -> Option<Trigger> {
+        match (event.kind, event.code) {
+            (EV_KEY, code) if event.value == 1 => Some(Trigger::Key(Key(code))),
+            (EV_REL, REL_WHEEL | REL_HWHEEL) if event.value != 0 => Some(Trigger::Scroll {
+                axis: if event.code == REL_WHEEL {
+                    ScrollAxis::Vertical
+                } else {
+                    ScrollAxis::Horizontal
+                },
+                positive: event.value > 0,
+            }),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for Trigger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -230,6 +250,29 @@ mod tests {
         assert_eq!("BTN_SIDE".parse(), Ok(Trigger::Key(Key(0x113))));
         assert!("REL_X:+".parse::<Trigger>().is_err());
         assert!("REL_WHEEL:up".parse::<Trigger>().is_err());
+    }
+
+    #[test]
+    fn only_presses_and_whole_scroll_ticks_are_triggers() {
+        let side = Key::from_name("BTN_SIDE").unwrap();
+        assert_eq!(
+            Trigger::from_event(&Event::key(side, 1)),
+            Some(Trigger::Key(side))
+        );
+        assert_eq!(Trigger::from_event(&Event::key(side, 0)), None);
+        assert_eq!(Trigger::from_event(&Event::key(side, 2)), None);
+        assert_eq!(
+            Trigger::from_event(&Event::rel(REL_WHEEL, -1)),
+            Some(Trigger::Scroll {
+                axis: ScrollAxis::Vertical,
+                positive: false
+            })
+        );
+        assert_eq!(
+            Trigger::from_event(&Event::rel(REL_WHEEL_HI_RES, 120)),
+            None
+        );
+        assert_eq!(Trigger::from_event(&Event::rel(0, 5)), None);
     }
 
     #[test]

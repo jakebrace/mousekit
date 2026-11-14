@@ -9,7 +9,8 @@
 //!     cargo test -p mouse-profiles --test fake_mouse -- --ignored
 //!
 //! It is safe to run while a real daemon is in use: the test daemon gets its
-//! own config, socket and virtual device name, and no focus backend.
+//! own config, bus name and virtual device name, and no tray, focus backend
+//! or autostart entry (that is what MOUSE_PROFILES_INSTANCE does).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,7 +26,7 @@ use evdev::{
 
 const BINARY: &str = env!("CARGO_BIN_EXE_mouse-profiles");
 const FAKE_NAME: &str = "mouse-profiles test mouse";
-const OUTPUT_NAME: &str = "mouse-profiles test output";
+const OUTPUT_NAME: &str = "mouse-profiles virtual mouse (test)";
 const TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Kills the daemon even when an assertion fails, so a failed test never
@@ -33,17 +34,21 @@ const TIMEOUT: Duration = Duration::from_secs(8);
 struct Daemon {
     child: Child,
     config_home: PathBuf,
-    runtime_dir: PathBuf,
 }
 
 impl Daemon {
-    fn command(&self, command: &str) -> String {
-        let output = Command::new(BINARY)
-            .arg(command)
+    fn cli(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(BINARY);
+        command
+            .args(args)
             .env("XDG_CONFIG_HOME", &self.config_home)
-            .env("XDG_RUNTIME_DIR", &self.runtime_dir)
-            .output()
-            .expect("run the CLI");
+            .env("MOUSE_PROFILES_INSTANCE", "test");
+        command
+    }
+
+    fn command(&self, command: &str) -> String {
+        let args: Vec<&str> = command.split(' ').collect();
+        let output = self.cli(&args).output().expect("run the CLI");
         String::from_utf8_lossy(&output.stdout).into_owned()
             + &String::from_utf8_lossy(&output.stderr)
     }
@@ -162,12 +167,9 @@ fn expect_key(output: &mut Device, code: KeyCode, value: i32) {
 #[test]
 #[ignore = "needs /dev/uinput and the udev rule; run by hand"]
 fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
-    // Kept short: a Unix socket path has a length limit of about 100 bytes.
     let temp = std::env::temp_dir().join(format!("mp-test-{}", std::process::id()));
     let config_dir = temp.join("config/mouse-profiles");
-    let runtime_dir = temp.join("runtime");
     fs::create_dir_all(config_dir.join("profiles")).unwrap();
-    fs::create_dir_all(&runtime_dir).unwrap();
     fs::write(
         config_dir.join("config.toml"),
         r#"
@@ -190,17 +192,13 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
     let child = Command::new(BINARY)
         .arg("daemon")
         .env("XDG_CONFIG_HOME", temp.join("config"))
-        .env("XDG_RUNTIME_DIR", &runtime_dir)
-        // Keep the test out of the real desktop's window manager.
-        .env("MOUSE_PROFILES_FOCUS", "none")
-        .env("MOUSE_PROFILES_VIRTUAL_NAME", OUTPUT_NAME)
+        .env("MOUSE_PROFILES_INSTANCE", "test")
         .stderr(Stdio::inherit())
         .spawn()
         .expect("start the daemon");
     let mut daemon = Daemon {
         child,
         config_home: temp.join("config"),
-        runtime_dir,
     };
 
     let mut output = grab_output();
@@ -277,6 +275,51 @@ fn daemon_remaps_a_fake_mouse_across_pause_and_replug() {
     expect_key(&mut output, KeyCode::KEY_F14, 1);
     fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
     expect_key(&mut output, KeyCode::KEY_F14, 0);
+
+    // A profile chosen by hand overrides the default until set back to auto.
+    fs::write(
+        config_dir.join("profiles/game.toml"),
+        "name = \"Game\"\n[match]\nwindow_class = [\"some-game\"]\n[bindings]\nM4 = { type = \"mouse_button\", button = \"BTN_MIDDLE\" }\n",
+    )
+    .unwrap();
+    assert!(daemon.command("reload").contains("1 app profile"));
+    assert!(daemon.command("profile Nope").contains("no profile named"));
+    assert!(daemon.command("profile game").contains("profile: Game"));
+    assert!(daemon.command("status").contains("chosen by hand"));
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::BTN_MIDDLE, 1);
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::BTN_MIDDLE, 0);
+    assert!(daemon.command("profile auto").contains("profile: Default"));
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 1);
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 0);
+
+    // capture reports the button's real name and swallows that press, then
+    // remapping carries on as before.
+    let capture = daemon
+        .cli(&["capture"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start capture");
+    sleep(Duration::from_millis(500));
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    let captured = capture.wait_with_output().expect("capture finishes");
+    assert_eq!(String::from_utf8_lossy(&captured.stdout).trim(), "BTN_SIDE");
+    fake.emit(&[key(KeyCode::BTN_SIDE, 1)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 1);
+    fake.emit(&[key(KeyCode::BTN_SIDE, 0)]).unwrap();
+    expect_key(&mut output, KeyCode::KEY_F14, 0);
+
+    // A second daemon refuses to start while the first is running.
+    let second = daemon
+        .cli(&["daemon"])
+        .output()
+        .expect("run a second daemon");
+    assert!(String::from_utf8_lossy(&second.stderr).contains("already running"));
 
     // quit stops the daemon cleanly, and a second command finds nobody home.
     assert!(daemon.command("quit").contains("stopping"));
