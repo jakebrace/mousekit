@@ -3,6 +3,7 @@ name = "mouse-profiles-gui"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [lib]
 name = "mouse_profiles_gui"
