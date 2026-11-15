@@ -4,7 +4,9 @@
 //! calls a D-Bus method on us every time the active window changes, so there
 //! is no polling: KWin pushes each change as it happens.
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use zbus::blocking::{Connection, connection, fdo};
 use zbus::interface;
@@ -15,8 +17,17 @@ use crate::{FocusBackend, FocusEvent, OnFocus, Window, WindowKind, exe_name};
 /// control interface. Must match SERVICE in focus.js.
 const BUS_NAME: &str = "io.github.jakebrace.mousekit.Focus";
 const OBJECT_PATH: &str = "/Focus";
-/// The name KWin knows the script by, used to unload a stale copy.
-const SCRIPT_NAME: &str = "mousekit-focus";
+/// The names KWin may know the focus script by, used to unload stale
+/// copies. Normally only the first is used; see `load_script` for why
+/// there are more.
+const SCRIPT_NAMES: [&str; 4] = [
+    "mousekit-focus",
+    "mousekit-focus-2",
+    "mousekit-focus-3",
+    "mousekit-focus-4",
+];
+/// How long the focus script gets to make its first report.
+const FIRST_REPORT: Duration = Duration::from_secs(2);
 /// KWin loads scripts from a file, so the embedded script is written out
 /// at startup.
 const SCRIPT_SOURCE: &str = include_str!("focus.js");
@@ -44,16 +55,22 @@ impl FocusBackend for Kde {
             Connection::session().map_err(|e| format!("cannot connect to the session bus: {e}"))?;
         // Rust's quoting of a plain string is also valid JavaScript.
         let source = format!("const CLASS = {class:?};\n{ACTIVATE_SOURCE}");
-        // KWin runs the script shortly after being asked, so it is left
-        // loaded; the next call (or cleanup) unloads it.
-        run_script(&conn, ACTIVATE_NAME, &source)
+        let result = run_script(&conn, ACTIVATE_NAME, &source);
+        // The script has done its work by the time KWin answers. It must
+        // not stay loaded: KWin numbers scripts by how many are loaded, so
+        // a script left behind makes a later reload of the focus script
+        // collide with it and silently never run.
+        let _ = unload_script(&conn, ACTIVATE_NAME);
+        result
     }
 
     fn cleanup(&self) {
         // Best effort: a script left behind only calls a service that is no
         // longer there, and the next start unloads it anyway.
         if let Ok(conn) = Connection::session() {
-            let _ = unload_script(&conn, SCRIPT_NAME);
+            for name in SCRIPT_NAMES {
+                let _ = unload_script(&conn, name);
+            }
             let _ = unload_script(&conn, ACTIVATE_NAME);
         }
     }
@@ -63,11 +80,15 @@ impl FocusBackend for Kde {
 /// D-Bus method `FocusChanged`.
 struct Listener {
     on_focus: OnFocus,
+    /// Counts focus reports, so `load_script` can tell that the script it
+    /// just loaded is really running.
+    reports: Arc<AtomicU64>,
 }
 
 #[interface(name = "io.github.jakebrace.mousekit.Focus1")]
 impl Listener {
     fn focus_changed(&self, class: &str, title: &str, pid: &str, kind: &str) {
+        self.reports.fetch_add(1, Ordering::SeqCst);
         let kind = match kind {
             "app" => WindowKind::App,
             "lock" => WindowKind::LockScreen,
@@ -109,13 +130,18 @@ fn exe_of(pid: &str) -> Option<String> {
 fn run(on_focus: OnFocus) -> Result<(), String> {
     // Claim the bus name and start answering before loading the script, so
     // its immediate report of the current window has somewhere to land.
+    let reports = Arc::new(AtomicU64::new(0));
+    let listener = Listener {
+        on_focus,
+        reports: reports.clone(),
+    };
     let conn = connection::Builder::session()
         .and_then(|builder| builder.name(BUS_NAME))
-        .and_then(|builder| builder.serve_at(OBJECT_PATH, Listener { on_focus }))
+        .and_then(|builder| builder.serve_at(OBJECT_PATH, listener))
         .and_then(|builder| builder.build())
         .map_err(|e| format!("cannot set up the focus listener on D-Bus: {e}"))?;
 
-    load_script(&conn)?;
+    load_script(&conn, &reports)?;
 
     // A script loaded over D-Bus dies with KWin. Watch for KWin coming back
     // (after a crash or `kwin_wayland --replace`) and load it again.
@@ -133,7 +159,7 @@ fn run(on_focus: OnFocus) -> Result<(), String> {
         let mut result = Err("not tried".to_string());
         for _ in 0..10 {
             std::thread::sleep(Duration::from_millis(500));
-            result = load_script(&conn);
+            result = load_script(&conn, &reports);
             if result.is_ok() {
                 break;
             }
@@ -148,9 +174,31 @@ fn run(on_focus: OnFocus) -> Result<(), String> {
     Err("lost the connection to the session bus".into())
 }
 
-/// Loads and starts the focus script.
-fn load_script(conn: &Connection) -> Result<(), String> {
-    run_script(conn, SCRIPT_NAME, SCRIPT_SOURCE)
+/// Loads and starts the focus script, and checks that it really started.
+///
+/// KWin numbers each script by how many are loaded at that moment. After
+/// some other script has been unloaded, that number can already belong to
+/// a script that is still loaded; KWin then reports success, but the new
+/// script never runs. The focus script reports the current window the
+/// moment it starts, so silence means that happened. The dead copy is left
+/// in place, which moves the count on, and the next name is tried.
+fn load_script(conn: &Connection, reports: &AtomicU64) -> Result<(), String> {
+    for name in SCRIPT_NAMES {
+        unload_script(conn, name)
+            .map_err(|e| format!("cannot reach KWin's scripting interface: {e}"))?;
+    }
+    for name in SCRIPT_NAMES {
+        let before = reports.load(Ordering::SeqCst);
+        run_script(conn, name, SCRIPT_SOURCE)?;
+        let deadline = Instant::now() + FIRST_REPORT;
+        while Instant::now() < deadline {
+            if reports.load(Ordering::SeqCst) != before {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    Err("KWin loaded the focus script but it never reported a window".into())
 }
 
 /// Unloads any stale copy of the script called `name`, then loads and
