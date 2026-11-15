@@ -23,36 +23,34 @@ struct Wanted {
     polling_hz: Option<u32>,
 }
 
-/// Opens the mouse, applies `wanted` where it differs from the current
-/// settings, and returns the settings afterwards. `Ok(None)` means no
-/// hardware backend can talk to this mouse.
+/// Opens the mouse, applies `wanted`, and returns the settings afterwards.
+/// `Ok(None)` means no hardware backend can talk to this mouse.
+///
+/// Wanted values are written even when the mouse already reports them: a
+/// mouse that reset itself while asleep is back on its onboard profile, and
+/// writing is what takes it off that profile again.
 fn apply(ids: &[DeviceId], wanted: &Wanted) -> Result<Option<HardwareInfo>, String> {
     let Some(mut hardware) = mousekit_hw::open(ids)? else {
         return Ok(None);
     };
     let before = hardware.info()?;
-    let mut changed = false;
-    if let Some(dpi) = wanted.dpi
-        && dpi != before.dpi
-    {
+    if let Some(dpi) = wanted.dpi {
         if !before.dpi_values.contains(&dpi) {
             return Err(format!("this mouse does not support {dpi} DPI"));
         }
         hardware.set_dpi(dpi)?;
-        changed = true;
     }
-    if let Some(hz) = wanted.polling_hz
-        && hz != before.polling_hz
-    {
+    if let Some(hz) = wanted.polling_hz {
         if !before.polling_values.contains(&hz) {
             return Err(format!("this mouse does not support {hz} Hz"));
         }
         hardware.set_polling_hz(hz)?;
-        changed = true;
+    }
+    if wanted.dpi.is_none() && wanted.polling_hz.is_none() {
+        return Ok(Some(before));
     }
     // Read back rather than assume, so what is shown is what the mouse says.
-    let after = if changed { hardware.info()? } else { before };
-    Ok(Some(after))
+    Ok(Some(hardware.info()?))
 }
 
 /// Called when a mouse connects: starts reading its sensor settings in the
@@ -77,19 +75,24 @@ pub(crate) fn start_sync(shared: &Shared, device_index: usize) {
     std::thread::spawn(move || sync(&shared, device_index));
 }
 
-/// Called when the computer wakes from sleep. The mouse or its receiver may
-/// have lost power and fallen back to its own stored DPI, without the input
-/// device ever disappearing, so nothing else would notice. Treats every
-/// mouse's settings as unknown and applies the config again; a mouse that
-/// is not answering yet is retried once it is used.
+/// Called when a mouse may have reset itself without its input device
+/// disappearing, so nothing else would notice: it fell back to its onboard
+/// profile and its own stored DPI. Treats the mouse's settings as unknown
+/// and applies the config again; if it is not answering yet, the reader
+/// thread retries while it is being used.
+pub(crate) fn resync(shared: &Shared, device_index: usize) {
+    if let Some(slot) = lock(shared).hardware.get_mut(device_index) {
+        *slot = None;
+    }
+    start_sync(shared, device_index);
+}
+
+/// Called when the computer wakes from sleep, during which any mouse or its
+/// receiver may have lost power.
 pub(crate) fn resync_all(shared: &Shared) {
-    let count = {
-        let mut state = lock(shared);
-        state.hardware.fill(None);
-        state.hardware.len()
-    };
+    let count = lock(shared).hardware.len();
     for device_index in 0..count {
-        start_sync(shared, device_index);
+        resync(shared, device_index);
     }
 }
 

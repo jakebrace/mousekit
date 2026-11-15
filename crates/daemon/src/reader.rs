@@ -1,9 +1,16 @@
 //! The per-mouse thread: read a frame, remap it, write it.
 
+use std::time::{Duration, Instant};
+
 use mousekit_core::Event;
 use mousekit_input::{Frame, Mouse, NodeInfo};
 
 use crate::{Shared, lock, log};
+
+/// A mouse silent for this long may have gone to sleep. A wireless mouse
+/// that sleeps deeply enough restarts on waking, back on its onboard profile
+/// and stored DPI, while its input device stays connected throughout.
+const IDLE_RESYNC: Duration = Duration::from_secs(30);
 
 pub(crate) fn run(shared: Shared, device_index: usize, node: NodeInfo, mut mouse: Mouse) {
     let label = format!("{} \"{}\"", node.id, node.name);
@@ -37,12 +44,20 @@ pub(crate) fn run(shared: Shared, device_index: usize, node: NodeInfo, mut mouse
 /// Runs until reading fails, which means the mouse went away.
 fn forward(shared: &Shared, device_index: usize, mouse: &mut Mouse) {
     let mut frame: Vec<Event> = Vec::with_capacity(16);
+    let mut last_frame = Instant::now();
     loop {
         // Blocks here, outside the lock, until the mouse does something.
         let kind = match mouse.next_frame(&mut frame) {
             Ok(kind) => kind,
             Err(_) => return,
         };
+        // The first event after a long silence: the mouse may just have
+        // woken up with its own settings, so apply ours again.
+        let idle = last_frame.elapsed();
+        last_frame = Instant::now();
+        if idle >= IDLE_RESYNC {
+            crate::hardware::resync(shared, device_index);
+        }
 
         let mut guard = lock(shared);
         // Reborrow so the fields can be borrowed separately below.
